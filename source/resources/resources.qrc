@@ -1,0 +1,30 @@
+<RCC>
+  <qresource prefix="resources">
+    <file>icons/bl/bl.ico</file>
+    <file>icons/drop_down_arrow.svg</file>
+    <file>icons/info.svg</file>
+    <file>icons/exclamation.svg</file>
+    <file>icons/wiki.svg</file>
+    <file>icons/delete.svg</file>
+    <file>icons/folder.svg</file>
+    <file>icons/box_checked.svg</file>
+    <file>icons/box_unchecked.svg</file>
+    <file>icons/fake.svg</file>
+    <file>icons/favorite.svg</file>
+    <file>icons/page_closed.svg</file>
+    <file>icons/page_opened.svg</file>
+    <file>icons/close.svg</file>
+    <file>icons/minimize.svg</file>
+    <file>icons/settings.svg</file>
+    <file>icons/size_grip.svg</file>
+    <file>icons/check.svg</file>
+    <file>icons/filled_circle.svg</file>
+    <file>icons/quick_launch.svg</file>
+    <file>icons/download.svg</file>
+    <file>icons/file.svg</file>
+    <file>icons/expand_less.svg</file>
+    <file>icons/expand_more.svg</file>
+    <file>styles/global.qss</file>
+    <file>fonts/OpenSans-SemiBold.ttf</file>
+  </qresource>
+</RCC>
