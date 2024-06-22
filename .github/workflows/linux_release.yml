@@ -29,7 +29,6 @@ jobs:
           echo "Listing installed packages"
           pip list
           echo "Building"
-          cd ./scripts/
           sh ./build_linux.sh
       - name: Zipping
         run: |
