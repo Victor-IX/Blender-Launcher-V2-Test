@@ -23,6 +23,7 @@ jobs:
           source ./.venv/bin/activate
           pip install -e ./
           python build_style.py
+          ls
           sh ./build_linux.sh
       - name: Zipping
         run: |
