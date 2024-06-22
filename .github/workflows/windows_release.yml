@@ -32,10 +32,10 @@ jobs:
       - name: Zipping
         run: |
           echo "Zipping to Blender_Launcher_${{ env.RELEASE_VERSION }}_Windows_x64.zip"
-          Compress-Archive -Path .\dist\release -DestinationPath Blender_Launcher_${{ env.RELEASE_VERSION }}_Windows_x64.zip
+          cd .\dist\release\
+          Compress-Archive -DestinationPath Blender_Launcher_${{ env.RELEASE_VERSION }}_Windows_x64.zip
       - name: Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: ./Blender_Launcher_${{ env.RELEASE_VERSION }}_Windows_x64.zip
-
+          files: ./dist/release/Blender_Launcher_${{ env.RELEASE_VERSION }}_Windows_x64.zip
