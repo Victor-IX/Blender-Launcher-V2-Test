@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,6 +26,8 @@ jobs:
           pip install -e ./
           echo "Building style"
           python build_style.py
+          echo "Listing installed packages"
+          pip list
           echo "Building"
           cd ./scripts/
           sh ./build_linux.sh
@@ -35,7 +37,7 @@ jobs:
           cd ./dist/release/
           zip Blender_Launcher_${{ env.RELEASE_VERSION }}_Ubuntu_x64.zip "./Blender Launcher"
       - name: Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: ./dist/release/Blender_Launcher_${{ env.RELEASE_VERSION }}_Ubuntu_x64.zip
