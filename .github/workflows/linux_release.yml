@@ -1,4 +1,4 @@
-name: Windows Release
+name: Linux Release
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: ubuntu-20.04
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -19,18 +19,18 @@ jobs:
           python-version: '3.9'
       - name: Build
         run: |
-          python -m venv .venv
-          .venv\Scripts\activate
+          python3 -m venv .venv
+          source ./.venv/bin/activate
           pip install -e ./
           python build_style.py
-          .\build_win.bat
+          sh ./scripts/build_linux.sh
       - name: Zipping
         run: |
-          echo "Zipping to Blender_Launcher_${{ env.RELEASE_VERSION }}_Windows_x64.zip"
-          Compress-Archive -Path .\dist\release -DestinationPath Blender_Launcher_${{ env.RELEASE_VERSION }}_Windows_x64.zip
+          echo "Zipping to Blender_Launcher_${{ env.RELEASE_VERSION }}_Ubuntu_x64.zip"
+          cd ./dist/release/
+          zip Blender_Launcher_${{ env.RELEASE_VERSION }}_Ubuntu_x64.zip "./Blender Launcher"
       - name: Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: ./Blender_Launcher_${{ env.RELEASE_VERSION }}_Windows_x64.zip
-
+          files: ./dist/release/Blender_Launcher_${{ env.RELEASE_VERSION }}_Ubuntu_x64.zip

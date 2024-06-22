@@ -38,12 +38,14 @@ from modules.settings import (
     get_scrape_stable_builds,
     get_show_tray_icon,
     get_sync_library_and_downloads_pages,
+    get_tray_icon_notified,
     get_use_pre_release_builds,
     get_use_system_titlebar,
     get_worker_thread_count,
     is_library_folder_valid,
     set_last_time_checked_utc,
     set_library_folder,
+    set_tray_icon_notified,
 )
 from modules.tasks import Task, TaskQueue, TaskWorker
 from PyQt5.QtCore import QSize, Qt, pyqtSignal, pyqtSlot
@@ -183,30 +185,57 @@ class BlenderLauncher(BaseWindow):
                 cancel_text=None,
                 icon=DialogIcon.INFO,
             )
-            self.dlg.accepted.connect(self.set_library_folder)
+            self.dlg.accepted.connect(self.prompt_library_folder)
         else:
             create_library_folders(get_library_folder())
             self.draw()
 
-    def set_library_folder(self):
+    def prompt_library_folder(self):
         library_folder = get_cwd().as_posix()
         new_library_folder = FileDialogWindow().get_directory(self, "Select Library Folder", library_folder)
 
         if new_library_folder:
-            if set_library_folder(new_library_folder) is True:
-                self.draw(True)
-            else:
-                self.dlg = DialogWindow(
-                    parent=self,
-                    title="Warning",
-                    text="Selected folder is not valid or<br>\
-                    doesn't have write permissions!",
-                    accept_text="Retry",
-                    cancel_text=None,
-                )
-                self.dlg.accepted.connect(self.set_library_folder)
+            self.set_library_folder(Path(new_library_folder))
         else:
             self.app.quit()
+
+    def set_library_folder(self, folder: Path, relative: bool | None = None):
+        """
+        Sets the library folder.
+        if relative is None and the folder *can* be relative, it will ask the user if it should use a relative path.
+        if relative is bool, it will / will not set the library folder as relative.
+        """
+
+        if folder.is_relative_to(get_cwd()):
+            if relative is None:
+                self.dlg = DialogWindow(
+                    parent=self,
+                    title="Setup",
+                    text="The selected path is relative to the executable's path.<br>\
+                        Would you like to save it as relative?<br>\
+                        This is useful if the folder may move.",
+                    accept_text="Yes",
+                    cancel_text="No",
+                )
+                self.dlg.accepted.connect(lambda: self.set_library_folder(folder, True))
+                self.dlg.cancelled.connect(lambda: self.set_library_folder(folder, False))
+                return
+
+            if relative:
+                folder = folder.relative_to(get_cwd())
+
+        if set_library_folder(str(folder)) is True:
+            self.draw(True)
+        else:
+            self.dlg = DialogWindow(
+                parent=self,
+                title="Warning",
+                text="Selected folder is not valid or<br>\
+                doesn't have write permissions!",
+                accept_text="Retry",
+                cancel_text=None,
+            )
+            self.dlg.accepted.connect(self.prompt_library_folder)
 
     def update_system_titlebar(self, b: bool):
         for window in self.windows:
@@ -481,7 +510,7 @@ class BlenderLauncher(BaseWindow):
             self.quick_launch()
 
     def show_changelog(self):
-        url = f"https://github.com/Victor-IX/Blender-Launcher-V2-Test/releases/tag/v{self.version!s}"
+        url = f"https://github.com/Victor-IX/Blender-Launcher-V2/releases/tag/v{self.version!s}"
         webbrowser.open(url)
 
     def toggle_sync_library_and_downloads_pages(self, is_sync):
@@ -634,7 +663,8 @@ class BlenderLauncher(BaseWindow):
             self._show()
         elif reason == QSystemTrayIcon.ActivationReason.MiddleClick:
             self.quick_launch()
-
+            # INFO: Middle click dose not work anymore on new Windows versions with PyQt5
+            # Middle click currently return the Trigger reason
         elif reason == QSystemTrayIcon.ActivationReason.Context:
             self.tray_menu.trigger()
 
@@ -807,7 +837,7 @@ class BlenderLauncher(BaseWindow):
                     widget.destroy()
 
         utcnow = localtime()
-        dt = datetime.fromtimestamp(mktime(utcnow), tz=timezone.utc)
+        dt = datetime.fromtimestamp(mktime(utcnow)).astimezone()
         set_last_time_checked_utc(dt)
         self.last_time_checked = dt
         self.app_state = AppState.IDLE
@@ -969,7 +999,6 @@ class BlenderLauncher(BaseWindow):
         else:
             self.NewVersionButton.hide()
 
-
     def show_settings_window(self):
         self.settings_window = SettingsWindow(parent=self)
 
@@ -988,6 +1017,12 @@ class BlenderLauncher(BaseWindow):
 
     def closeEvent(self, event):
         if get_show_tray_icon():
+            if not get_tray_icon_notified():
+                self.show_message(
+                    "Blender Launcher V2 is minimized to the system tray. "
+                    '\nDisable "Show Tray Icon" in the settings to disable this.'
+                )
+                set_tray_icon_notified()
             event.ignore()
             self.hide()
             self.close_signal.emit()

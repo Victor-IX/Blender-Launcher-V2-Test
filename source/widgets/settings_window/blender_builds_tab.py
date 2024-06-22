@@ -1,5 +1,6 @@
 from modules.settings import (
     favorite_pages,
+    blender_minimum_versions,
     get_bash_arguments,
     get_blender_startup_arguments,
     get_check_for_new_builds_automatically,
@@ -14,6 +15,9 @@ from modules.settings import (
     get_quick_launch_key_seq,
     get_scrape_automated_builds,
     get_scrape_stable_builds,
+    get_show_daily_archive_builds,
+    get_show_experimental_archive_builds,
+    get_show_patch_archive_builds,
     set_bash_arguments,
     set_blender_startup_arguments,
     set_check_for_new_builds_automatically,
@@ -27,6 +31,9 @@ from modules.settings import (
     set_quick_launch_key_seq,
     set_scrape_automated_builds,
     set_scrape_stable_builds,
+    set_show_daily_archive_builds,
+    set_show_experimental_archive_builds,
+    set_show_patch_archive_builds,
 )
 from PyQt5 import QtGui
 from PyQt5.QtCore import Qt
@@ -39,7 +46,6 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QSpinBox,
 )
-from widgets.sem_version_edit import SemVersionEdit
 from widgets.settings_form_widget import SettingsFormWidget
 
 from .settings_group import SettingsGroup
@@ -53,9 +59,10 @@ class BlenderBuildsTabWidget(SettingsFormWidget):
         self.buildcheck_settings = SettingsGroup("Checking For Builds", parent=self)
 
         # Minimum stable blender download version (this is mainly for cleanliness and speed)
-        self.MinStableBlenderVer = SemVersionEdit(v=get_minimum_blender_stable_version(), parent=self, use_patch=False)
-        self.MinStableBlenderVer.version_changed.connect(set_minimum_blender_stable_version)
-        self.MinStableBlenderVer.major.setMinimum(2)
+        self.MinStableBlenderVer = QComboBox()
+        self.MinStableBlenderVer.addItems(blender_minimum_versions.keys())
+        self.MinStableBlenderVer.setCurrentIndex(get_minimum_blender_stable_version())
+        self.MinStableBlenderVer.activated[str].connect(self.change_minimum_blender_stable_version)
 
         # Whether to check for new builds based on a timer
         self.CheckForNewBuildsAutomatically = QCheckBox()
@@ -89,6 +96,21 @@ class BlenderBuildsTabWidget(SettingsFormWidget):
         self.ScrapeAutomatedBuilds.clicked.connect(self.toggle_scrape_automated_builds)
         self.ScrapeAutomatedBuilds.setText("Scrape automated builds (daily/experimental/patch)")
 
+        # Show Archive Builds
+        self.show_daily_archive_builds = QCheckBox(self)
+        self.show_daily_archive_builds.setText("Show Daily Archive Builds")
+        self.show_daily_archive_builds.setChecked(get_show_daily_archive_builds())
+        self.show_daily_archive_builds.clicked.connect(self.toggle_show_daily_archive_builds)
+        self.show_experimental_archive_builds = QCheckBox(self)
+        self.show_experimental_archive_builds.setText("Show Experimental Archive Builds")
+        self.show_experimental_archive_builds.setChecked(get_show_experimental_archive_builds())
+        self.show_experimental_archive_builds.clicked.connect(self.toggle_show_experimental_archive_builds)
+        self.show_patch_archive_builds = QCheckBox(self)
+        self.show_patch_archive_builds.setText("Show Patch Archive Builds")
+        self.show_patch_archive_builds.setChecked(get_show_patch_archive_builds())
+        self.show_patch_archive_builds.clicked.connect(self.toggle_show_patch_archive_builds)
+
+        # Layout
         self.scraping_builds_layout = QGridLayout()
         self.scraping_builds_layout.addWidget(self.CheckForNewBuildsAutomatically, 0, 0, 1, 1)
         self.scraping_builds_layout.addWidget(self.NewBuildsCheckFrequency, 0, 1, 1, 1)
@@ -97,6 +119,9 @@ class BlenderBuildsTabWidget(SettingsFormWidget):
         self.scraping_builds_layout.addWidget(self.MinStableBlenderVer, 2, 1, 1, 1)
         self.scraping_builds_layout.addWidget(self.ScrapeStableBuilds, 3, 0, 1, 2)
         self.scraping_builds_layout.addWidget(self.ScrapeAutomatedBuilds, 4, 0, 1, 2)
+        self.scraping_builds_layout.addWidget(self.show_daily_archive_builds, 5, 0, 1, 2)
+        self.scraping_builds_layout.addWidget(self.show_experimental_archive_builds, 6, 0, 1, 2)
+        self.scraping_builds_layout.addWidget(self.show_patch_archive_builds, 7, 0, 1, 2)
         self.buildcheck_settings.setLayout(self.scraping_builds_layout)
 
         # Downloading builds settings
@@ -112,6 +137,7 @@ class BlenderBuildsTabWidget(SettingsFormWidget):
         self.MarkAsFavorite.setCurrentIndex(max(get_mark_as_favorite() - 1, 0))
         self.MarkAsFavorite.activated[str].connect(self.change_mark_as_favorite)
         self.MarkAsFavorite.setEnabled(self.EnableMarkAsFavorite.isChecked())
+
         # Install Template
         self.InstallTemplate = QCheckBox()
         self.InstallTemplate.setText("Install Template")
@@ -175,6 +201,9 @@ class BlenderBuildsTabWidget(SettingsFormWidget):
 
     def change_mark_as_favorite(self, page):
         set_mark_as_favorite(page)
+
+    def change_minimum_blender_stable_version(self, proxy_type):
+        set_minimum_blender_stable_version(proxy_type)
 
     def update_blender_startup_arguments(self):
         args = self.BlenderStartupArguments.text()
@@ -255,3 +284,15 @@ class BlenderBuildsTabWidget(SettingsFormWidget):
     def toggle_scrape_automated_builds(self, is_checked):
         set_scrape_automated_builds(is_checked)
         self.ScrapeAutomatedBuilds.setChecked(is_checked)
+
+    def toggle_show_daily_archive_builds(self, is_checked):
+        set_show_daily_archive_builds(is_checked)
+        self.show_daily_archive_builds.setChecked(is_checked)
+
+    def toggle_show_experimental_archive_builds(self, is_checked):
+        set_show_experimental_archive_builds(is_checked)
+        self.show_experimental_archive_builds.setChecked(is_checked)
+
+    def toggle_show_patch_archive_builds(self, is_checked):
+        set_show_patch_archive_builds(is_checked)
+        self.show_patch_archive_builds.setChecked(is_checked)

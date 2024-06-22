@@ -8,7 +8,6 @@ from pathlib import Path
 
 from modules._platform import get_config_file, get_config_path, get_cwd, get_platform, local_config, user_config
 from PyQt5.QtCore import QSettings
-from semver import Version
 
 EPOCH = datetime.fromtimestamp(0, tz=timezone.utc)
 ISO_EPOCH = EPOCH.isoformat()
@@ -61,6 +60,22 @@ proxy_types = {
 }
 
 
+blender_minimum_versions = {
+    "4.0": 0,
+    "3.6": 1,
+    "3.5": 2,
+    "3.4": 3,
+    "3.3": 4,
+    "3.2": 5,
+    "3.1": 6,
+    "3.0": 7,
+    "2.90": 8,
+    "2.80": 9,
+    "2.79": 10,
+    "None": 11,
+}
+
+
 def get_settings():
     file = get_config_file()
     if not file.parent.is_dir():
@@ -69,7 +84,7 @@ def get_settings():
     return QSettings(get_config_file().as_posix(), QSettings.Format.IniFormat)
 
 
-def get_library_folder():
+def get_actual_library_folder():
     settings = get_settings()
     library_folder = settings.value("library_folder")
 
@@ -77,7 +92,10 @@ def get_library_folder():
         library_folder = get_cwd()
         settings.setValue("library_folder", library_folder)
 
-    return library_folder
+    return Path(library_folder)
+
+def get_library_folder():
+    return get_actual_library_folder().resolve()
 
 
 def is_library_folder_valid(library_folder=None):
@@ -95,7 +113,7 @@ def is_library_folder_valid(library_folder=None):
     return False
 
 
-def set_library_folder(new_library_folder):
+def set_library_folder(new_library_folder: str):
     settings = get_settings()
 
     if is_library_folder_valid(new_library_folder) is True:
@@ -280,6 +298,14 @@ def set_show_tray_icon(is_checked):
     get_settings().setValue("show_tray_icon", is_checked)
 
 
+def get_tray_icon_notified():
+    return get_settings().value("Internal/tray_icon_notified", defaultValue=False, type=bool)
+
+
+def set_tray_icon_notified(b=True):
+    get_settings().setValue("Internal/tray_icon_notified", b)
+
+
 def get_launch_blender_no_console():
     return get_settings().value("launch_blender_no_console", type=bool)
 
@@ -402,15 +428,17 @@ def set_check_for_new_builds_on_startup(b: bool):
     get_settings().setValue("buildcheck_on_startup", b)
 
 
-def get_minimum_blender_stable_version() -> Version:
-    settings = get_settings()
-    v = settings.value("minimum_blender_stable_version", defaultValue="3.0", type=str)
-    major, minor = v.split(".")
-    return Version(int(major), int(minor), 0)
+def get_minimum_blender_stable_version():
+    value = get_settings().value("minimum_blender_stable_version")
+
+    if value is not None and "." in value:
+        return blender_minimum_versions.get(value, 7)
+    else:
+        return get_settings().value("minimum_blender_stable_version", defaultValue=7, type=int)
 
 
-def set_minimum_blender_stable_version(v: Version):
-    get_settings().setValue("minimum_blender_stable_version", f"{v.major}.{v.minor}")
+def set_minimum_blender_stable_version(blender_minimum_version):
+    get_settings().setValue("minimum_blender_stable_version", blender_minimum_versions[blender_minimum_version])
 
 
 def get_scrape_stable_builds() -> bool:
@@ -427,6 +455,30 @@ def get_scrape_automated_builds() -> bool:
 
 def set_scrape_automated_builds(b: bool):
     get_settings().setValue("scrape_automated_builds", b)
+
+
+def get_show_daily_archive_builds() -> bool:
+    return get_settings().value("show_daily_archive_builds", defaultValue=False, type=bool)
+
+
+def set_show_daily_archive_builds(b: bool):
+    get_settings().setValue("show_daily_archive_builds", b)
+
+
+def get_show_experimental_archive_builds() -> bool:
+    return get_settings().value("show_experimental_archive_builds", defaultValue=False, type=bool)
+
+
+def set_show_experimental_archive_builds(b: bool):
+    get_settings().setValue("show_experimental_archive_builds", b)
+
+
+def get_show_patch_archive_builds() -> bool:
+    return get_settings().value("show_patch_archive_builds", defaultValue=False, type=bool)
+
+
+def set_show_patch_archive_builds(b: bool):
+    get_settings().setValue("show_patch_archive_builds", b)
 
 
 def get_make_error_popup():

@@ -1,21 +1,21 @@
 from __future__ import annotations
-from operator import contains
 
-import distro
 import contextlib
-from distutils.command import build
 import json
 import logging
 import re
+
 from datetime import datetime, timezone
 from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urljoin
 
+import distro
 import semver
+from semver import Version
 from bs4 import BeautifulSoup, SoupStrainer
-from modules._platform import get_platform, reset_locale, set_locale, stable_cache_path
+from modules._platform import get_platform, reset_locale, set_locale, stable_cache_path, get_architecture
 from modules.build_info import BuildInfo, parse_blender_ver
 from modules.scraper_cache import StableCache
 from modules.settings import (
@@ -23,6 +23,10 @@ from modules.settings import (
     get_scrape_automated_builds,
     get_scrape_stable_builds,
     get_use_pre_release_builds,
+    get_show_daily_archive_builds,
+    get_show_experimental_archive_builds,
+    get_show_patch_archive_builds,
+    blender_minimum_versions,
 )
 from PyQt5.QtCore import QThread, pyqtSignal
 
@@ -86,9 +90,10 @@ def get_latest_pre_release_tag(
                 platform_valid_tags.append(release["tag_name"])
 
     pre_release_tags = [release.lstrip("v") for release in platform_valid_tags]
+    valid_pre_release_tags = [tag for tag in pre_release_tags if semver.VersionInfo.is_valid(tag)]
 
-    if pre_release_tags:
-        tag = max(pre_release_tags, key=semver.VersionInfo.parse)
+    if valid_pre_release_tags:
+        tag = max(valid_pre_release_tags, key=semver.VersionInfo.parse)
         return f"v{tag}"
 
     r.release_conn()
@@ -108,6 +113,7 @@ class Scraper(QThread):
         self.parent = parent
         self.manager: ConnectionManager = man
         self.platform = get_platform()
+        self.architecture = get_architecture()
 
         self.cache_path = stable_cache_path()
 
@@ -143,10 +149,10 @@ class Scraper(QThread):
         self.get_download_links()
 
         if get_use_pre_release_builds():
-            url = "https://api.github.com/repos/Victor-IX/Blender-Launcher-V2-Test/releases"
+            url = "https://api.github.com/repos/Victor-IX/Blender-Launcher-V2/releases"
             latest_tag = get_latest_pre_release_tag(self.manager, url)
         else:
-            url = "https://github.com/Victor-IX/Blender-Launcher-V2-Test/releases/latest"
+            url = "https://github.com/Victor-IX/Blender-Launcher-V2/releases/latest"
             latest_tag = get_latest_tag(self.manager, url)
 
         if latest_tag is not None:
@@ -168,7 +174,18 @@ class Scraper(QThread):
 
     def scrape_automated_releases(self):
         base_fmt = "https://builder.blender.org/download/{}/?format=json&v=1"
-        for branch_type in ("daily", "experimental", "patch"):
+
+        branch_mapping = {
+            "daily": get_show_daily_archive_builds,
+            "experimental": get_show_experimental_archive_builds,
+            "patch": get_show_patch_archive_builds,
+        }
+
+        branches = tuple(
+            f"{branch}/archive" if check_archive() else branch for branch, check_archive in branch_mapping.items()
+        )
+
+        for branch_type in branches:
             url = base_fmt.format(branch_type)
             r = self.manager.request("GET", url)
 
@@ -176,11 +193,31 @@ class Scraper(QThread):
                 continue
 
             data = json.loads(r.data)
-            for build in data:
-                if build["platform"] == self.json_platform and self.b3d_link.match(build["file_name"]):
-                    yield self.new_build_from_dict(build, branch_type)
+            architecture_specific_build = False
 
-    def new_build_from_dict(self, build, branch_type):
+            # Remove /archive from branch name
+            if "/archive" in branch_type:
+                branch_type = branch_type.replace("/archive", "")
+
+            for build in data:
+                if (
+                    build["platform"] == self.json_platform
+                    and build["architecture"].lower() == self.architecture.lower()
+                    and self.b3d_link.match(build["file_name"])
+                ):
+                    architecture_specific_build = True
+                    yield self.new_build_from_dict(build, branch_type, architecture_specific_build)
+
+            if not architecture_specific_build:
+                logger.warning(
+                    f"No builds found for {branch_type} build on {self.platform} architecture {self.architecture}"
+                )
+
+                for build in data:
+                    if build["platform"] == self.json_platform and self.b3d_link.match(build["file_name"]):
+                        yield self.new_build_from_dict(build, branch_type, architecture_specific_build)
+
+    def new_build_from_dict(self, build, branch_type, architecture_specific_build):
         dt = datetime.fromtimestamp(build["file_mtime"], tz=timezone.utc)
 
         subversion = parse_blender_ver(build["version"])
@@ -191,6 +228,11 @@ class Scraper(QThread):
             build_var = build["release_cycle"]
         if build["branch"] and branch_type == "experimental":
             build_var = build["branch"]
+
+        if "architecture" in build and not architecture_specific_build:
+            if build["architecture"] == "amd64":
+                build["architecture"] = "x86_64"
+            build_var += " | " + build["architecture"]
 
         if build_var:
             subversion = subversion.replace(prerelease=build_var)
@@ -294,7 +336,15 @@ class Scraper(QThread):
                 yield from build.assets
             return
 
-        minimum_version = get_minimum_blender_stable_version()
+        # Convert string to Verison
+        minimum_version_index = get_minimum_blender_stable_version()
+        version_at_index = list(blender_minimum_versions.keys())[minimum_version_index]
+        if version_at_index == "None":
+            minimum_smver_version = Version(0, 0, 0)
+        else:
+            major, minor = version_at_index.split(".")
+            minimum_smver_version = Version(major, minor, 0)
+
         cache_modified = False
         for release in releases:
             href = release["href"]
@@ -303,7 +353,7 @@ class Scraper(QThread):
                 continue
 
             ver = parse_blender_ver(match.group(0))
-            if ver >= minimum_version:
+            if ver >= minimum_smver_version:
                 # Check modified dates of folders, if available
                 date_sibling = release.find_next_sibling(string=True)
                 if date_sibling:
