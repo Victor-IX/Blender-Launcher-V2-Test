@@ -15,8 +15,8 @@ jobs:
         run: echo "RELEASE_VERSION=${env:GITHUB_REF#refs/*/}" >> $env:GITHUB_ENV
       - name: Debug - Check RELEASE_VERSION
         run: |
-          echo $env:RELEASE_VERSION
-          echo ${{ env.RELEASE_VERSION }}
+          echo "$env:RELEASE_VERSION"
+          echo "${{ env.RELEASE_VERSION }}""
       - name: Setup Python
         uses: actions/setup-python@v5.0.0
         with:
