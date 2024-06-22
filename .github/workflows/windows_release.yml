@@ -23,7 +23,8 @@ jobs:
           .venv\Scripts\activate
           pip install -e ./
           python build_style.py
-          .\scripts\build_win.bat
+          cd .\scripts\
+          .\build_win.bat
       - name: Zipping
         run: |
           echo "Zipping to Blender_Launcher_${{ env.RELEASE_VERSION }}_Windows_x64.zip"
@@ -33,3 +34,4 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: ./Blender_Launcher_${{ env.RELEASE_VERSION }}_Windows_x64.zip
+

@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -23,7 +23,8 @@ jobs:
           source ./.venv/bin/activate
           pip install -e ./
           python build_style.py
-          sh ./scripts/build_linux.sh
+          cd ./scripts/
+          sh ./build_linux.sh
       - name: Zipping
         run: |
           echo "Zipping to Blender_Launcher_${{ env.RELEASE_VERSION }}_Ubuntu_x64.zip"
