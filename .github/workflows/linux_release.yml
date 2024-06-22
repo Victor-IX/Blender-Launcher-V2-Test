@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Set env
         run: echo "RELEASE_VERSION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
       - name: Setup Python
@@ -19,10 +19,14 @@ jobs:
           python-version: '3.9'
       - name: Build
         run: |
+          echo "Venv setup"
           python3 -m venv .venv
           source ./.venv/bin/activate
+          echo "Installing dependencies"
           pip install -e ./
+          echo "Building style"
           python build_style.py
+          echo "Building"
           cd ./scripts/
           sh ./build_linux.sh
       - name: Zipping
