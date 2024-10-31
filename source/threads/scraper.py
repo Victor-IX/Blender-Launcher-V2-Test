@@ -1,105 +1,167 @@
 from __future__ import annotations
 
+import base64
 import contextlib
 import json
 import logging
 import re
-
 from datetime import datetime, timezone
 from itertools import chain
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 from urllib.parse import urljoin
 
+import dateparser
 import distro
-import semver
-from semver import Version
 from bs4 import BeautifulSoup, SoupStrainer
-from modules._platform import get_platform, reset_locale, set_locale, stable_cache_path, get_architecture
+from modules._platform import (
+    bfa_cache_path,
+    get_architecture,
+    get_platform,
+    stable_cache_path,
+)
+from modules.bl_api_manager import (
+    dropdown_blender_version,
+    lts_blender_version,
+    update_local_api_files,
+    update_stable_builds_cache,
+)
 from modules.build_info import BuildInfo, parse_blender_ver
-from modules.scraper_cache import StableCache
+from modules.scraper_cache import ScraperCache
 from modules.settings import (
     get_minimum_blender_stable_version,
     get_scrape_automated_builds,
+    get_scrape_bfa_builds,
     get_scrape_stable_builds,
-    get_use_pre_release_builds,
     get_show_daily_archive_builds,
     get_show_experimental_archive_builds,
     get_show_patch_archive_builds,
-    blender_minimum_versions,
+    get_use_pre_release_builds,
 )
 from PyQt5.QtCore import QThread, pyqtSignal
+from semver import Version
+from webdav4.client import Client
 
 if TYPE_CHECKING:
     from modules.connection_manager import ConnectionManager
 
 logger = logging.getLogger()
 
+# NC: NextCloud
+BFA_NC_BASE_URL = "https://cloud.bforartists.de"
+BFA_NC_HTTPS_URL = f"{BFA_NC_BASE_URL}/index.php/s"
+# https://archive.ph/esTuX#accessing-public-shares-over-webdav
+BFA_NC_WEBDAV_URL = f"{BFA_NC_BASE_URL}/public.php/webdav"
+BFA_NC_WEBDAV_SHARE_TOKEN = "JxCjbyt2fFcHjy4"
 
-def get_latest_tag(
+
+def get_bfa_nc_https_download_url(webdav_file_path: PurePosixPath):
+    return f"{BFA_NC_HTTPS_URL}/{BFA_NC_WEBDAV_SHARE_TOKEN}/download?path=/{webdav_file_path.parent}&files={webdav_file_path.name}"
+
+
+def get_release_tag(connection_manager: ConnectionManager) -> str | None:
+    if get_use_pre_release_builds():
+        url = "https://api.github.com/repos/Victor-IX/Blender-Launcher-V2/releases"
+        latest_tag = get_tag(connection_manager, url, pre_release=True)
+    else:
+        url = "https://github.com/Victor-IX/Blender-Launcher-V2/releases/latest"
+        latest_tag = get_tag(connection_manager, url)
+
+    logger.info(f"Latest release tag: {latest_tag}")
+
+    return latest_tag
+
+
+def get_tag(
     connection_manager: ConnectionManager,
-    url,
+    url: str,
+    pre_release=False,
 ) -> str | None:
     r = connection_manager.request("GET", url)
 
     if r is None:
         return None
 
-    url = r.geturl()
-    tag = url.rsplit("/", 1)[-1]
+    if pre_release:
+        try:
+            parsed_data = json.loads(r.data)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse pre-release tag JSON data: {e}")
+            return None
 
-    r.release_conn()
-    r.close()
+        platform = get_platform()
 
-    return tag
+        if platform.lower() == "linux":
+            for key in (
+                distro.id().title(),
+                distro.like().title(),
+                distro.id(),
+                distro.like(),
+            ):
+                if "ubuntu" in key.lower():
+                    platform = "Ubuntu"
+                    break
+
+        platform_valid_tags = (
+            release["tag_name"]
+            for release in parsed_data
+            for asset in release["assets"]
+            if asset["name"].endswith(".zip") and platform.lower() in asset["name"].lower()
+        )
+        pre_release_tags = (release.lstrip("v") for release in platform_valid_tags)
+
+        valid_pre_release_tags = [tag for tag in pre_release_tags if Version.is_valid(tag)]
+
+        if valid_pre_release_tags:
+            tag = max(valid_pre_release_tags, key=Version.parse)
+            return f"v{tag}"
+
+        r.release_conn()
+        r.close()
+
+        return None
+
+    else:
+        url = r.geturl()
+        tag = url.rsplit("/", 1)[-1]
+
+        r.release_conn()
+        r.close()
+
+        return tag
 
 
-def get_latest_pre_release_tag(
-    connection_manager: ConnectionManager,
-    url,
-) -> str | None:
+def get_api_data(connection_manager: ConnectionManager, file: str) -> str | None:
+    base_fmt = "https://api.github.com/repos/Victor-IX/Blender-Launcher-V2/contents/source/resources/api/{}.json"
+    url = base_fmt.format(file)
+    logger.debug(f"Start fetching API data from: {url}")
     r = connection_manager.request("GET", url)
 
     if r is None:
+        logger.error(f"Failed to fetch data from: {url}.")
         return None
 
     try:
-        parsed_data = json.loads(r.data)
-    except json.JSONDecodeError:
+        data = json.loads(r.data)
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse {file} API JSON data: {e}")
         return None
 
-    platform = get_platform()
+    file_content = data["content"] if "content" in data else None
+    file_content_encoding = data.get("encoding")
 
-    if platform.lower() == "linux":
-        for key in (
-            distro.id().title(),
-            distro.like().title(),
-            distro.id(),
-            distro.like(),
-        ):
-            if "ubuntu" in key.lower():
-                platform = "Ubuntu"
-                break
-
-    parsed_data = json.loads(r.data)
-    platform_valid_tags = []
-
-    for release in parsed_data:
-        for asset in release["assets"]:
-            if asset["name"].endswith(".zip") and platform.lower() in asset["name"].lower():
-                platform_valid_tags.append(release["tag_name"])
-
-    pre_release_tags = [release.lstrip("v") for release in platform_valid_tags]
-    valid_pre_release_tags = [tag for tag in pre_release_tags if semver.VersionInfo.is_valid(tag)]
-
-    if valid_pre_release_tags:
-        tag = max(valid_pre_release_tags, key=semver.VersionInfo.parse)
-        return f"v{tag}"
-
-    r.release_conn()
-    r.close()
-
-    return None
+    if file_content_encoding == "base64" and file_content:
+        try:
+            file_content = base64.b64decode(file_content).decode("utf-8")
+            json_data = json.loads(file_content)
+            logger.info(f"API data form {file} have been loaded successfully")
+            return json_data
+        except (base64.binascii.Error, json.JSONDecodeError) as e:
+            logger.error(f"Failed to decode or parse JSON data: {e}")
+            return None
+    else:
+        logger.error(f"Failed to load API data from {file} or unsupported encoding.")
+        return None
 
 
 class Scraper(QThread):
@@ -108,22 +170,18 @@ class Scraper(QThread):
     error = pyqtSignal()
     stable_error = pyqtSignal(str)
 
-    def __init__(self, parent, man):
+    def __init__(self, parent, man: ConnectionManager):
         QThread.__init__(self)
         self.parent = parent
-        self.manager: ConnectionManager = man
+        self.manager = man
         self.platform = get_platform()
         self.architecture = get_architecture()
 
         self.cache_path = stable_cache_path()
+        self.bfa_cache_path = bfa_cache_path()
 
-        if self.cache_path.exists():
-            with stable_cache_path().open("r", encoding="utf-8") as f:
-                cache = json.load(f)
-                self.cache = StableCache.from_dict(cache)
-                logging.debug(f"Loaded cache from {self.cache_path!r}")
-        else:
-            self.cache = StableCache()
+        self.cache = ScraperCache.from_file_or_default(self.cache_path)
+        self.bfa_cache = ScraperCache.from_file_or_default(self.bfa_cache_path)
 
         self.json_platform = {
             "Windows": "windows",
@@ -133,44 +191,63 @@ class Scraper(QThread):
 
         if self.platform == "Windows":
             regex_filter = r"blender-.+win.+64.+zip$"
+            bfa_regex_filter = r"Bforartists-.+Windows.+zip"
         elif self.platform == "macOS":
             regex_filter = r"blender-.+(macOS|darwin).+dmg$"
+            bfa_regex_filter = r"Bforartists-.+dmg$"
         else:
             regex_filter = r"blender-.+lin.+64.+tar+(?!.*sha256).*"
+            bfa_regex_filter = r"Bforartists-.+tar.xz$"
 
         self.b3d_link = re.compile(regex_filter, re.IGNORECASE)
         self.hash = re.compile(r"\w{12}")
         self.subversion = re.compile(r"-\d\.[a-zA-Z0-9.]+-")
+        self.bfa_package_file_name_regex = re.compile(bfa_regex_filter, re.IGNORECASE)
 
         self.scrape_stable = get_scrape_stable_builds()
         self.scrape_automated = get_scrape_automated_builds()
+        self.scrape_bfa = get_scrape_bfa_builds()
 
     def run(self):
+        self.get_api_data_manager()
         self.get_download_links()
+        self.get_release_tag_manager()
 
-        if get_use_pre_release_builds():
-            url = "https://api.github.com/repos/Victor-IX/Blender-Launcher-V2/releases"
-            latest_tag = get_latest_pre_release_tag(self.manager, url)
-        else:
-            url = "https://github.com/Victor-IX/Blender-Launcher-V2/releases/latest"
-            latest_tag = get_latest_tag(self.manager, url)
+    def get_release_tag_manager(self):
+        assert self.manager.manager is not None
+        latest_tag = get_release_tag(self.manager)
 
         if latest_tag is not None:
             self.new_bl_version.emit(latest_tag)
         self.manager.manager.clear()
 
+    def get_api_data_manager(self):
+        assert self.manager.manager is not None
+
+        bl_api_data = get_api_data(self.manager, "blender_launcher_api")
+        blender_version_api_data = get_api_data(self.manager, f"stable_builds_api_{self.platform.lower()}")
+
+        if bl_api_data is not None:
+            update_local_api_files(bl_api_data)
+            lts_blender_version()
+            dropdown_blender_version()
+
+        update_stable_builds_cache(blender_version_api_data)
+
+        self.manager.manager.clear()
+
     def get_download_links(self):
-        set_locale()
 
         scrapers = []
         if self.scrape_stable:
             scrapers.append(self.scrap_stable_releases())
         if self.scrape_automated:
             scrapers.append(self.scrape_automated_releases())
+        if self.scrape_bfa:
+            scrapers.append(self.scrape_bfa_releases())
         for build in chain(*scrapers):
             self.links.emit(build)
 
-        reset_locale()
 
     def scrape_automated_releases(self):
         base_fmt = "https://builder.blender.org/download/{}/?format=json&v=1"
@@ -245,7 +322,7 @@ class Scraper(QThread):
             branch_type,
         )
 
-    def scrap_download_links(self, url, branch_type, _limit=None, stable=False):
+    def scrap_download_links(self, url, branch_type, _limit=None):
         r = self.manager.request("GET", url)
 
         if r is None:
@@ -305,8 +382,7 @@ class Scraper(QThread):
                 branch = "daily"
                 subversion = subversion.replace(prerelease=build_var)
 
-        commit_time = datetime.strptime(info["last-modified"], "%a, %d %b %Y %H:%M:%S %Z").astimezone()
-
+        commit_time = dateparser.parse(info["last-modified"]).astimezone()
         r.release_conn()
         r.close()
         return BuildInfo(link, str(subversion), build_hash, commit_time, branch)
@@ -321,45 +397,38 @@ class Scraper(QThread):
         content = r.data
         soup = BeautifulSoup(content, "lxml")
 
-        b3d_link = re.compile(r"Blender\d+\.\d+")
-        subversion = re.compile(r"\d+\.\d+")
+        b3d_link = re.compile(r"Blender(\d+\.\d+)")
 
         releases = soup.find_all(href=b3d_link)
         if not any(releases):
             logger.info("Failed to gather stable releases")
             logger.info(content)
-            self.stable_error.emit(
-                "No releases were scraped from the site!<br>Using cached links.<br>check -debug logs for more details.<br>"
-            )
-            # Use cached links
-            for build in self.cache.folders.values():
-                yield from build.assets
+            self.stable_error.emit("No releases were scraped from the site!<br>check -debug logs for more details.")
             return
 
         # Convert string to Verison
-        minimum_version_index = get_minimum_blender_stable_version()
-        version_at_index = list(blender_minimum_versions.keys())[minimum_version_index]
-        if version_at_index == "None":
+        minimum_version_str = get_minimum_blender_stable_version()
+        if minimum_version_str == "None":
             minimum_smver_version = Version(0, 0, 0)
         else:
-            major, minor = version_at_index.split(".")
-            minimum_smver_version = Version(major, minor, 0)
+            major, minor = minimum_version_str.split(".")
+            minimum_smver_version = Version(int(major), int(minor), 0)
 
         cache_modified = False
         for release in releases:
             href = release["href"]
-            match = re.search(subversion, href)
+            match = re.search(b3d_link, href)
             if match is None:
                 continue
 
-            ver = parse_blender_ver(match.group(0))
+            ver = parse_blender_ver(match.group(1))
             if ver >= minimum_smver_version:
                 # Check modified dates of folders, if available
                 date_sibling = release.find_next_sibling(string=True)
                 if date_sibling:
                     date_str = " ".join(date_sibling.strip().split()[:2])
                     with contextlib.suppress(ValueError):
-                        modified_date = datetime.strptime(date_str, "%d-%b-%Y %H:%M").astimezone(tz=timezone.utc)
+                        modified_date = dateparser.parse(date_str).astimezone(tz=timezone.utc)
                         if ver not in self.cache:
                             logger.debug(f"Creating new folder for version {ver}")
                             folder = self.cache.new_build(ver)
@@ -367,12 +436,13 @@ class Scraper(QThread):
                             folder = self.cache[ver]
 
                         if folder.modified_date != modified_date:
-                            builds = list(self.scrap_download_links(urljoin(url, href), "stable", stable=True))
+                            folder.assets.clear()
+                            for build in self.scrap_download_links(urljoin(url, href), "stable"):
+                                folder.assets.append(build)
+                                yield build
+
                             logger.debug(f"Caching {href}: {modified_date} (previous was {folder.modified_date})")
-
-                            folder.assets = builds
                             folder.modified_date = modified_date
-
                             cache_modified = True
                         else:
                             logger.debug(f"Skipping {href}: {modified_date}")
@@ -380,7 +450,7 @@ class Scraper(QThread):
                         yield from builds
                         continue
 
-                yield from self.scrap_download_links(urljoin(url, href), "stable", stable=True)
+                yield from self.scrap_download_links(urljoin(url, href), "stable")
 
         if cache_modified:
             with self.cache_path.open("w", encoding="utf-8") as f:
@@ -389,3 +459,65 @@ class Scraper(QThread):
 
         r.release_conn()
         r.close()
+
+    def scrape_bfa_releases(self):
+        client = Client(BFA_NC_WEBDAV_URL, auth=(BFA_NC_WEBDAV_SHARE_TOKEN, ""))
+        cache_modified = False
+        for entry in client.ls("", detail=True, allow_listing_resource=True):
+            if isinstance(entry, str):
+                continue
+            if entry["type"] != "directory":
+                continue
+            try:
+                semver = Version.parse(entry["name"].split()[-1])
+            except ValueError:
+                continue
+
+            # check if the cache needs to be updated
+            modified_date: datetime = entry["modified"]
+            if semver not in self.bfa_cache:
+                folder = self.bfa_cache.new_build(semver)
+            else:
+                folder = self.bfa_cache[semver]
+
+            if folder.modified_date < modified_date:
+                for release in self.scrape_bfa_release(client, entry["name"], semver):
+                    folder.assets.append(release)
+                    yield release
+
+                folder.modified_date = modified_date
+                cache_modified = True
+            else:
+                logger.debug(f"Skipping {entry['name']}: {modified_date}")
+                yield from folder.assets
+
+        if cache_modified:
+            with self.bfa_cache_path.open("w", encoding="utf-8") as f:
+                json.dump(self.bfa_cache.to_dict(), f)
+                logging.debug(f"Saved cache to {self.bfa_cache_path}")
+
+    def scrape_bfa_release(self, client: Client, folder: str, semver: Version):
+        for entry in client.ls(folder, detail=True, allow_listing_resource=True):
+            if isinstance(entry, str):
+                continue
+            path = entry["name"]
+            ppath = PurePosixPath(path)
+            if self.bfa_package_file_name_regex.match(ppath.name) is None:
+                continue
+            commit_time = entry["modified"]
+            if not isinstance(commit_time, datetime):
+                continue
+
+            exe_name = {
+                "Windows": "bforartists.exe",
+                "Linux": "bforartists",
+                "macOS": "Bforartists/Bforartists.app/Contents/MacOS/Bforartists",
+            }.get(get_platform(), "bforartists")
+            yield BuildInfo(
+                get_bfa_nc_https_download_url(ppath),
+                str(semver),
+                None,
+                commit_time.astimezone(),
+                "bforartists",
+                custom_executable=exe_name,
+            )

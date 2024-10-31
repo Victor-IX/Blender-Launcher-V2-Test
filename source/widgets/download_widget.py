@@ -10,6 +10,7 @@ from modules.enums import MessageType
 from modules.settings import get_install_template, get_library_folder
 from PyQt5.QtCore import Qt, pyqtSignal, pyqtSlot
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+from semver import Version
 from threads.downloader import DownloadTask
 from threads.extractor import ExtractTask
 from threads.renamer import RenameTask
@@ -138,7 +139,7 @@ class DownloadWidget(BaseBuildWidget):
 
         self.menu.trigger()
 
-    def mouseDoubleClickEvent(self, event):
+    def mouseDoubleClickEvent(self, _event):
         if self.state != DownloadState.DOWNLOADING and not self.installed:
             self.init_downloader()
         elif self.installed:
@@ -148,7 +149,7 @@ class DownloadWidget(BaseBuildWidget):
     def focus_installed(self):
         self.focus_installed_widget.emit(self.installed)
 
-    def mouseReleaseEvent(self, event):
+    def mouseReleaseEvent(self, _event):
         if self.show_new is True:
             self.build_state_widget.setNewBuild(False)
             self.show_new = False
@@ -202,6 +203,8 @@ class DownloadWidget(BaseBuildWidget):
             dist = library_folder / "stable"
         elif self.build_info.branch == "daily":
             dist = library_folder / "daily"
+        elif self.build_info.branch == "bforartists":
+            dist = library_folder / "bforartists"
         else:
             dist = library_folder / "experimental"
 
@@ -248,7 +251,13 @@ class DownloadWidget(BaseBuildWidget):
         assert self.build_dir is not None
 
         # If the returned version from the executable is invalid it might break loading.
-        ver = parse_blender_ver(self.build_dir.name, search=True)
+        ver_ = parse_blender_ver(self.build_dir.name, search=True)
+        ver = Version(
+            ver_.major,
+            ver_.minor,
+            ver_.patch,
+            prerelease=ver_.prerelease,
+        )
 
         a = ReadBuildTask(
             self.build_dir,
@@ -258,6 +267,7 @@ class DownloadWidget(BaseBuildWidget):
                 build_hash=None,
                 commit_time=self.build_info.commit_time,
                 branch=self.build_info.branch,
+                custom_executable=self.build_info.custom_executable
             ),
             archive_name=archive_name,
         )
@@ -289,9 +299,15 @@ class DownloadWidget(BaseBuildWidget):
             assert self.source_file is not None
             self.parent.clear_temp(self.source_file)
 
-            name = f"{self.subversionLabel.text()} {self.branchLabel.text} {self.build_info.commit_time}"
+            if self.build_info.branch == "bforartists":
+                message = f"Bforartists {self.subversionLabel.text()} {self.build_info.commit_time}"
+            else:
+                name = f"{self.subversionLabel.text()} {self.branchLabel.text} {self.build_info.commit_time}"
+                message = f"Blender {name}"
+            message += " download finished!"
+
             self.parent.show_message(
-                f"Blender {name} download finished!",
+                message,
                 message_type=MessageType.DOWNLOADFINISHED,
             )
             self.setInstalled(widget)

@@ -1,6 +1,6 @@
 [project]
 name = "Blender-Launcher-V2"
-version = "2.1.24"
+version = "2.3.0"
 description = ""
 authors = []
 dependencies = [
@@ -15,10 +15,19 @@ dependencies = [
     "pywin32==303; sys_platform == \"win32\"",
     "distro>=1.8.0",
     "semver>=3.0.2",
+    "zstandard>=0.23.0",
+    "send2trash>=1.8.3",
+    "webdav4==0.10.0",
+    "dateparser>=1.2.0",
 ]
 requires-python = ">=3.9, <3.11"
 readme = "README.md"
 license = { text = "MIT" }
+
+[project.optional-dependencies]
+docs = ["mkdocs", "mkdocs-material>=9.5.10"]
+ruff = ["ruff>=0.3.5"]
+
 
 [build-system]
 build-backend = "pdm.backend"
@@ -30,15 +39,17 @@ url = "https://pypi.python.org/simple"
 verify_ssl = true
 name = "pypi"
 
-[tool.pdm.dev-dependencies]
-dev = ["rope", "mkdocs", "mkdocs-material>=9.5.10", "ruff>=0.3.5"]
-
 [tool.ruff]
 line-length = 120
 target-version = "py39"
 
 [tool.ruff.lint]
-extend-ignore = ["F401", "E501", "B905", "SIM114", "A003", "SIM108", "ISC001"]
+extend-ignore = [
+  "F401",   # unused-import -- Certain imports need to be explicitly made, even though they are unused
+  "E501",   # line-too-long -- Unavoidable in some cases, but it should still be followed everywhere else
+  "SIM114", # if-with-same-arms -- This can make the code harder to read and understand in some places
+  "SIM108", # if-else-block-instead-of-if-exp -- Same as above, but this is more common
+]
 extend-select = [
   "A",     # flake8-builtins
   "ASYNC", # flake8-async

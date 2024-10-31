@@ -25,6 +25,7 @@ from modules.settings import (
     get_default_downloads_page,
     get_default_library_page,
     get_default_tab,
+    get_dont_show_resource_warning,
     get_enable_download_notifications,
     get_enable_new_builds_notifications,
     get_enable_quick_launch_key_seq,
@@ -36,6 +37,7 @@ from modules.settings import (
     get_quick_launch_key_seq,
     get_scrape_automated_builds,
     get_scrape_stable_builds,
+    get_scrape_bfa_builds,
     get_show_tray_icon,
     get_sync_library_and_downloads_pages,
     get_tray_icon_notified,
@@ -43,6 +45,7 @@ from modules.settings import (
     get_use_system_titlebar,
     get_worker_thread_count,
     is_library_folder_valid,
+    set_dont_show_resource_warning,
     set_last_time_checked_utc,
     set_library_folder,
     set_tray_icon_notified,
@@ -63,6 +66,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 from semver import Version
+from modules._resources_rc import RESOURCES_AVAILABLE
 from threads.library_drawer import DrawLibraryTask
 from threads.remover import RemovalTask
 from threads.scraper import Scraper
@@ -113,9 +117,9 @@ class BlenderLauncher(BaseWindow):
 
     def __init__(self, app: QApplication, version: Version, offline: bool = False):
         super().__init__(app=app, version=version)
-        self.resize(640, 480)
+        self.resize(800, 700)
         self.setMinimumSize(QSize(640, 480))
-        self.setMaximumSize(QSize(1024, 768))
+        self.setMaximumWidth(1250)
         widget = QWidget(self)
         self.CentralLayout = QVBoxLayout(widget)
         self.CentralLayout.setContentsMargins(1, 1, 1, 1)
@@ -175,6 +179,17 @@ class BlenderLauncher(BaseWindow):
         # Vesrion Update
         self.pre_release_build = get_use_pre_release_builds
 
+        if not RESOURCES_AVAILABLE and not get_dont_show_resource_warning():
+            dlg = DialogWindow(
+                parent=self,
+                title="Error",
+                text="Resources failed to load! The launcher will still work,<br> \
+                but the style will be broken.",
+                accept_text="OK",
+                cancel_text="Don't Show Again",
+            )
+            dlg.cancelled.connect(self.__dont_show_resources_warning_again)
+
         # Check library folder
         if is_library_folder_valid() is False:
             self.dlg = DialogWindow(
@@ -189,6 +204,9 @@ class BlenderLauncher(BaseWindow):
         else:
             create_library_folders(get_library_folder())
             self.draw()
+
+    def __dont_show_resources_warning_again(self):
+        set_dont_show_resource_warning(True)
 
     def prompt_library_folder(self):
         library_folder = get_cwd().as_posix()
@@ -303,7 +321,7 @@ class BlenderLauncher(BaseWindow):
         self.UserTabLayout = QVBoxLayout()
         self.UserTabLayout.setContentsMargins(0, 0, 0, 0)
         self.UserTab.setLayout(self.UserTabLayout)
-        self.TabWidget.addTab(self.UserTab, "User")
+        self.TabWidget.addTab(self.UserTab, "Favorites")
 
         self.LibraryToolBox = BaseToolBoxWidget(self)
         self.DownloadsToolBox = BaseToolBoxWidget(self)
@@ -344,6 +362,15 @@ class BlenderLauncher(BaseWindow):
             self.LibraryExperimentalPageWidget, "Experimental"
         )
 
+        self.LibraryBFAPageWidget = BasePageWidget(
+            parent=self,
+            page_name="LibraryBFAListWidget",
+            time_label="Commit Time",
+            info_text="Nothing to show yet",
+            extended_selection=True,
+        )
+        self.LibraryBFAListWidget = self.LibraryToolBox.add_page_widget(self.LibraryBFAPageWidget, "Bforartists")
+
         self.DownloadsStablePageWidget = BasePageWidget(
             parent=self,
             page_name="DownloadsStableListWidget",
@@ -370,6 +397,14 @@ class BlenderLauncher(BaseWindow):
             self.DownloadsExperimentalPageWidget, "Experimental"
         )
 
+        self.DownloadsBFAPageWidget = BasePageWidget(
+            parent=self,
+            page_name="DownloadsBFAListWidget",
+            time_label="Upload Time",
+            info_text="No new builds available",
+        )
+        self.DownloadsBFAListWidget = self.DownloadsToolBox.add_page_widget(self.DownloadsBFAPageWidget, "Bforartists")
+
         self.UserFavoritesListWidget = BasePageWidget(
             parent=self, page_name="UserFavoritesListWidget", time_label="Commit Time", info_text="Nothing to show yet"
         )
@@ -383,7 +418,7 @@ class BlenderLauncher(BaseWindow):
             show_reload=True,
             extended_selection=True,
         )
-        self.UserCustomListWidget = self.UserToolBox.add_page_widget(self.UserCustomPageWidget, "Custom")
+        self.UserCustomListWidget = self.LibraryToolBox.add_page_widget(self.UserCustomPageWidget, "Custom")
 
         self.TabWidget.setCurrentIndex(get_default_tab())
         self.LibraryToolBox.setCurrentIndex(get_default_library_page())
@@ -668,29 +703,6 @@ class BlenderLauncher(BaseWindow):
         elif reason == QSystemTrayIcon.ActivationReason.Context:
             self.tray_menu.trigger()
 
-    def _aboutToQuit(self):
-        self.quit_()
-
-    def quit_(self):
-        busy = self.task_queue.get_busy_threads()
-        if any(busy):
-            self.dlg = DialogWindow(
-                parent=self,
-                title="Warning",
-                text=(
-                    "Some tasks are still in progress!<br>"
-                    + "\n".join([f" - {item}<br>" for worker, item in busy.items()])
-                    + "Are you sure you want to quit?"
-                ),
-                accept_text="Yes",
-                cancel_text="No",
-            )
-
-            self.dlg.accepted.connect(self.destroy)
-            return
-
-        self.destroy()
-
     def kill_thread_with_task(self, task: Task):
         """
         Kills a thread listener using the current action.
@@ -736,6 +748,7 @@ class BlenderLauncher(BaseWindow):
             self.DownloadsStableListWidget.clear_()
             self.DownloadsDailyListWidget.clear_()
             self.DownloadsExperimentalListWidget.clear_()
+            self.DownloadsBFAListWidget.clear_()
             self.started = True
 
         self.favorite = None
@@ -743,6 +756,7 @@ class BlenderLauncher(BaseWindow):
         self.LibraryStableListWidget.clear_()
         self.LibraryDailyListWidget.clear_()
         self.LibraryExperimentalListWidget.clear_()
+        self.LibraryBFAListWidget.clear_()
         self.UserCustomListWidget.clear_()
 
         self.library_drawer = DrawLibraryTask()
@@ -785,19 +799,21 @@ class BlenderLauncher(BaseWindow):
 
     def force_check(self):
         if QApplication.queryKeyboardModifiers() & Qt.Modifier.SHIFT:  # Shift held while pressing check
-            # Ignore scrape_stable and scrape_automated settings
-            self.start_scraper(True, True)
+            # Ignore scrape_stable, scrape_automated and scrape_bfa settings
+            self.start_scraper(True, True, True)
         else:
             # Use settings
             self.start_scraper()
 
-    def start_scraper(self, scrape_stable=None, scrape_automated=None):
+    def start_scraper(self, scrape_stable=None, scrape_automated=None, scrape_bfa=None):
         self.set_status("Checking for new builds", False)
 
         if scrape_stable is None:
             scrape_stable = get_scrape_stable_builds()
         if scrape_automated is None:
             scrape_automated = get_scrape_automated_builds()
+        if scrape_bfa is None:
+            scrape_bfa = get_scrape_bfa_builds()
 
         if scrape_stable:
             self.DownloadsStablePageWidget.set_info_label_text("Checking for new builds")
@@ -813,10 +829,16 @@ class BlenderLauncher(BaseWindow):
             if page is not self.DownloadsStablePageWidget:
                 page.set_info_label_text(msg)
 
+        if scrape_bfa:
+            self.DownloadsBFAPageWidget.set_info_label_text("Checking for new builds")
+        else:
+            self.DownloadsBFAPageWidget.set_info_label_text("Checking for Bforartists builds is disabled")
+
         # Sometimes these builds end up being invalid, particularly when new builds are available, which, there usually
         # are at least once every two days. They are so easily gathered there's little loss here
         self.DownloadsDailyListWidget.clear_()
         self.DownloadsExperimentalListWidget.clear_()
+        self.DownloadsBFAListWidget.clear_()
 
         self.cashed_builds.clear()
         self.new_downloads = False
@@ -824,6 +846,7 @@ class BlenderLauncher(BaseWindow):
 
         self.scraper.scrape_stable = scrape_stable
         self.scraper.scrape_automated = scrape_automated
+        self.scraper.scrape_bfa = scrape_bfa
         self.scraper.manager = self.cm
         self.scraper.start()
 
@@ -857,17 +880,14 @@ class BlenderLauncher(BaseWindow):
         if self.app_state == AppState.IDLE:
             for cashed_build in self.cashed_builds:
                 if build_info == cashed_build:
-                    self.draw_to_downloads(cashed_build, False)
+                    self.draw_to_downloads(cashed_build)
                     return
 
-    def draw_to_downloads(self, build_info: BuildInfo, show_new=True):
-        if self.started:
-            show_new = False
+    def draw_to_downloads(self, build_info: BuildInfo):
+        if self.started and build_info.commit_time < self.last_time_checked:
+            is_new = False
         else:
-            show_new = True
-
-        if build_info.commit_time > self.last_time_checked:
-            show_new = True
+            is_new = True
 
         if build_info not in self.cashed_builds:
             self.cashed_builds.append(build_info)
@@ -880,6 +900,9 @@ class BlenderLauncher(BaseWindow):
         elif branch == "daily":
             downloads_list_widget = self.DownloadsDailyListWidget
             library_list_widget = self.LibraryDailyListWidget
+        elif branch == "bforartists":
+            downloads_list_widget = self.DownloadsBFAListWidget
+            library_list_widget = self.LibraryBFAListWidget
         else:
             downloads_list_widget = self.DownloadsExperimentalListWidget
             library_list_widget = self.LibraryExperimentalListWidget
@@ -893,11 +916,11 @@ class BlenderLauncher(BaseWindow):
                 item,
                 build_info,
                 installed=installed,
-                show_new=show_new,
+                show_new=is_new,
             )
             widget.focus_installed_widget.connect(self.focus_widget)
             downloads_list_widget.add_item(item, widget)
-            if show_new:
+            if is_new:
                 self.new_downloads = True
 
     def draw_to_library(self, path: Path, show_new=False):
@@ -912,6 +935,9 @@ class BlenderLauncher(BaseWindow):
         elif branch == "experimental":
             library = self.LibraryExperimentalListWidget
             download = self.DownloadsExperimentalListWidget
+        elif branch == "bforartists":
+            library = self.LibraryBFAListWidget
+            download = self.DownloadsBFAListWidget
         elif branch == "custom":
             library = self.UserCustomListWidget
             download = None
@@ -942,6 +968,8 @@ class BlenderLauncher(BaseWindow):
             list_widget = self.LibraryDailyListWidget
         elif branch == "experimental":
             list_widget = self.LibraryExperimentalListWidget
+        elif branch == "bforartists":
+            list_widget = self.LibraryBFAListWidget
         elif branch == "custom":
             list_widget = self.UserCustomListWidget
         else:
@@ -1008,12 +1036,32 @@ class BlenderLauncher(BaseWindow):
         a = RemovalTask(path)
         self.task_queue.append(a)
 
+    def _aboutToQuit(self):  # MacOS Target
+        self.quit_()
+
+    def quit_(self):
+        busy = self.task_queue.get_busy_threads()
+        if any(busy):
+            self.dlg = DialogWindow(
+                parent=self,
+                title="Warning",
+                text=(
+                    "Some tasks are still in progress!<br>"
+                    + "\n".join([f" - {item}<br>" for worker, item in busy.items()])
+                    + "Are you sure you want to quit?"
+                ),
+                accept_text="Yes",
+                cancel_text="No",
+            )
+
+            self.dlg.accepted.connect(self.destroy)
+            return
+
+        self.destroy()
+
     @pyqtSlot()
     def attempt_close(self):
-        if get_show_tray_icon():
-            self.close()
-        else:
-            self.quit_()
+        self.close()
 
     def closeEvent(self, event):
         if get_show_tray_icon():
@@ -1027,7 +1075,7 @@ class BlenderLauncher(BaseWindow):
             self.hide()
             self.close_signal.emit()
         else:
-            self.destroy()
+            self.quit_()
 
     def new_connection(self):
         self.socket = self.server.nextPendingConnection()

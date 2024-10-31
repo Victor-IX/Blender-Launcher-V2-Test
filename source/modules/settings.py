@@ -1,13 +1,18 @@
+from __future__ import annotations
+
 import contextlib
 import os
 import shutil
 import sys
+import uuid
 from datetime import datetime, timezone
-from functools import cache
 from pathlib import Path
 
 from modules._platform import get_config_file, get_config_path, get_cwd, get_platform, local_config, user_config
+from modules.bl_api_manager import dropdown_blender_version
+from modules.version_matcher import VersionSearchQuery
 from PyQt5.QtCore import QSettings
+from semver import Version
 
 EPOCH = datetime.fromtimestamp(0, tz=timezone.utc)
 ISO_EPOCH = EPOCH.isoformat()
@@ -60,22 +65,6 @@ proxy_types = {
 }
 
 
-blender_minimum_versions = {
-    "4.0": 0,
-    "3.6": 1,
-    "3.5": 2,
-    "3.4": 3,
-    "3.3": 4,
-    "3.2": 5,
-    "3.1": 6,
-    "3.0": 7,
-    "2.90": 8,
-    "2.80": 9,
-    "2.79": 10,
-    "None": 11,
-}
-
-
 def get_settings():
     file = get_config_file()
     if not file.parent.is_dir():
@@ -93,6 +82,7 @@ def get_actual_library_folder():
         settings.setValue("library_folder", library_folder)
 
     return Path(library_folder)
+
 
 def get_library_folder():
     return get_actual_library_folder().resolve()
@@ -135,6 +125,14 @@ def get_favorite_path():
 
 def set_favorite_path(path):
     get_settings().setValue("Internal/favorite_path", path)
+
+
+def get_dont_show_resource_warning():
+    return get_settings().value("Internal/dont_show_resource_err_again", type=bool, defaultValue=False)
+
+
+def set_dont_show_resource_warning(b: bool = True):
+    get_settings().setValue("Internal/dont_show_resource_err_again", b)
 
 
 def get_last_time_checked_utc():
@@ -291,7 +289,7 @@ def set_install_template(is_checked):
 
 
 def get_show_tray_icon():
-    return get_settings().value("show_tray_icon", defaultValue=True, type=bool)
+    return get_settings().value("show_tray_icon", defaultValue=False, type=bool)
 
 
 def set_show_tray_icon(is_checked):
@@ -307,7 +305,7 @@ def set_tray_icon_notified(b=True):
 
 
 def get_launch_blender_no_console():
-    return get_settings().value("launch_blender_no_console", type=bool)
+    return get_settings().value("launch_blender_no_console", defaultValue=True, type=bool)
 
 
 def set_launch_blender_no_console(is_checked):
@@ -354,7 +352,7 @@ def get_proxy_port():
     port = get_settings().value("proxy/port")
 
     if port is None:
-        return "99999"
+        return "9999"
     return port.strip()
 
 
@@ -394,6 +392,19 @@ def set_use_custom_tls_certificates(is_checked):
     get_settings().setValue("use_custom_tls_certificates", is_checked)
 
 
+def get_user_id():
+    user_id = get_settings().value("user_id", type=str).strip()
+    if not user_id:
+        user_id = str(uuid.uuid4())
+        set_user_id(user_id)
+    return user_id
+
+
+def set_user_id(user_id):
+    get_settings().setValue("user_id", user_id.strip())
+
+
+# Blender Build Tab
 def get_check_for_new_builds_automatically():
     settings = get_settings()
 
@@ -428,17 +439,22 @@ def set_check_for_new_builds_on_startup(b: bool):
     get_settings().setValue("buildcheck_on_startup", b)
 
 
-def get_minimum_blender_stable_version():
-    value = get_settings().value("minimum_blender_stable_version")
+def get_minimum_blender_stable_version() -> str:
+    value = get_settings().value("minimum_blender_stable_version", defaultValue="3.0", type=str)
+    # value can never be None
+    if value == "None":
+        return "3.0"
 
-    if value is not None and "." in value:
-        return blender_minimum_versions.get(value, 7)
-    else:
-        return get_settings().value("minimum_blender_stable_version", defaultValue=7, type=int)
+    # backwards compatibility for indexes
+    # (This is not recommended because it relies on the dropdown blender versions to be static)
+    with contextlib.suppress(ValueError, IndexError):
+        if "." not in value:
+            return list(dropdown_blender_version())[int(value)]
+    return value
 
 
-def set_minimum_blender_stable_version(blender_minimum_version):
-    get_settings().setValue("minimum_blender_stable_version", blender_minimum_versions[blender_minimum_version])
+def set_minimum_blender_stable_version(blender_minimum_version: str):
+    get_settings().setValue("minimum_blender_stable_version", blender_minimum_version)
 
 
 def get_scrape_stable_builds() -> bool:
@@ -455,6 +471,14 @@ def get_scrape_automated_builds() -> bool:
 
 def set_scrape_automated_builds(b: bool):
     get_settings().setValue("scrape_automated_builds", b)
+
+
+def get_scrape_bfa_builds() -> bool:
+    return get_settings().value("scrape_bfa_builds", defaultValue=True, type=bool)
+
+
+def set_scrape_bfa_builds(b: bool):
+    get_settings().setValue("scrape_bfa_builds", b)
 
 
 def get_show_daily_archive_builds() -> bool:
@@ -523,6 +547,32 @@ def get_use_system_titlebar():
 
 def set_use_system_titlebar(b: bool):
     get_settings().setValue("use_system_title_bar", b)
+
+
+def get_version_specific_queries() -> dict[Version, VersionSearchQuery]:
+    import json
+
+    dct = get_settings().value("version_specific_queries", defaultValue="{}", type=str)
+    if dct is None:
+        return {}
+    return {Version.parse(k): VersionSearchQuery.parse(v) for k, v in json.loads(dct).items()}
+
+
+def set_version_specific_queries(dct: dict[Version, VersionSearchQuery]):
+    import json
+
+    v = {str(k): str(v) for k, v in dct.items()}
+    j = json.dumps(v)
+    get_settings().setValue("version_specific_queries", j)
+
+
+def get_launch_timer_duration() -> int:
+    return get_settings().value("launch_timer", defaultValue=3, type=int)
+
+
+def set_launch_timer_duration(duration: int):
+    """Sets the launch timer duration, in seconds"""
+    get_settings().setValue("launch_timer", duration)
 
 
 def migrate_config(force=False):
