@@ -6,14 +6,14 @@ from typing import TYPE_CHECKING, Any
 
 from modules.enums import MessageType
 from modules.task import Task
-from PyQt5.QtCore import QThread, pyqtSignal, pyqtSlot
+from PySide6.QtCore import QThread, Signal, Slot
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 
 class TaskQueue(deque[Task]):
-    message = pyqtSignal(str, MessageType)
+    message = Signal(str, MessageType)
 
     def __init__(
         self,
@@ -40,7 +40,8 @@ class TaskQueue(deque[Task]):
 
         def update_listener_dct(item, w=w):
             self.workers[w] = item
-            logging.debug(f"{w}: {item!r}")
+            if item is not None:
+                logging.debug(f"{w}: {item!r}")
 
         w.item_changed.connect(update_listener_dct)
         if readd_on_crash:
@@ -74,13 +75,14 @@ class TaskQueue(deque[Task]):
         for worker, item in list(self.workers.items()):
             if worker.isRunning():
                 worker.fullstop()
-                logging.debug(f"Stopped {worker} {item}")
+                if item is not None:
+                    logging.debug(f"Stopped {worker} {item}")
 
 
 class TaskWorker(QThread):
-    item_changed = pyqtSignal(object)  # Task | None
-    message = pyqtSignal(str, MessageType)
-    error = pyqtSignal(Exception)
+    item_changed = Signal(object)  # Task | None
+    message = Signal(str, MessageType)
+    error = Signal(Exception)
 
     def __init__(self, queue: TaskQueue, parent=None):
         super().__init__(parent)
@@ -111,11 +113,11 @@ class TaskWorker(QThread):
                 self.error.emit(e)
             self.item.message.disconnect(self.send_message)
 
-    @pyqtSlot(str, MessageType)
+    @Slot(str, MessageType)
     def send_message(self, s, mtp):
         self.message.emit(s, mtp)
 
-    @pyqtSlot()
+    @Slot()
     def fullstop(self):
         self.terminate()
 

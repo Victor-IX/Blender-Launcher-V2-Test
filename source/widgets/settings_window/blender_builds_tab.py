@@ -1,3 +1,4 @@
+from modules._platform import get_platform
 from modules.bl_api_manager import dropdown_blender_version
 from modules.settings import (
     favorite_pages,
@@ -11,11 +12,7 @@ from modules.settings import (
     get_mark_as_favorite,
     get_minimum_blender_stable_version,
     get_new_builds_check_frequency,
-    get_platform,
     get_quick_launch_key_seq,
-    get_scrape_automated_builds,
-    get_scrape_bfa_builds,
-    get_scrape_stable_builds,
     get_show_daily_archive_builds,
     get_show_experimental_archive_builds,
     get_show_patch_archive_builds,
@@ -33,13 +30,17 @@ from modules.settings import (
     set_scrape_automated_builds,
     set_scrape_bfa_builds,
     set_scrape_stable_builds,
+    set_show_bfa_builds,
     set_show_daily_archive_builds,
+    set_show_daily_builds,
+    set_show_experimental_and_patch_builds,
     set_show_experimental_archive_builds,
     set_show_patch_archive_builds,
+    set_show_stable_builds,
 )
-from PyQt5 import QtGui
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (
+from PySide6 import QtGui
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFormLayout,
@@ -47,15 +48,33 @@ from PyQt5.QtWidgets import (
     QLabel,
     QLineEdit,
     QSpinBox,
+    QVBoxLayout,
 )
+from widgets.repo_group import RepoGroup
 from widgets.settings_form_widget import SettingsFormWidget
-
-from .settings_group import SettingsGroup
+from widgets.settings_window.settings_group import SettingsGroup
 
 
 class BlenderBuildsTabWidget(SettingsFormWidget):
     def __init__(self, parent=None):
         super().__init__(parent=parent)
+
+        # Repo visibility and downloading settings
+        self.repo_settings = SettingsGroup("Visibility and Downloading", parent=self)
+
+        self.repo_group = RepoGroup(self)
+        self.repo_group.stable_repo.library_changed.connect(lambda b: set_show_stable_builds(b))
+        self.repo_group.stable_repo.download_changed.connect(self.toggle_scrape_stable_builds)
+        self.repo_group.daily_repo.library_changed.connect(lambda b: set_show_daily_builds(b))
+        self.repo_group.daily_repo.download_changed.connect(self.toggle_scrape_automated_builds)
+        self.repo_group.experimental_repo.library_changed.connect(lambda b: set_show_experimental_and_patch_builds(b))
+        self.repo_group.bforartists_repo.library_changed.connect(lambda b: set_show_bfa_builds(b))
+        self.repo_group.bforartists_repo.download_changed.connect(self.toggle_scrape_bfa_builds)
+
+        qvl = QVBoxLayout()
+        # qvl.setContentsMargins(0, 0, 0, 0)
+        qvl.addWidget(self.repo_group)
+        self.repo_settings.setLayout(qvl)
 
         # Checking for builds settings
         self.buildcheck_settings = SettingsGroup("Checking For Builds", parent=self)
@@ -70,7 +89,7 @@ class BlenderBuildsTabWidget(SettingsFormWidget):
             \nDEFAULT: 3.2"
         )
         self.MinStableBlenderVer.setCurrentText(get_minimum_blender_stable_version())
-        self.MinStableBlenderVer.activated[str].connect(self.change_minimum_blender_stable_version)
+        self.MinStableBlenderVer.activated[int].connect(self.change_minimum_blender_stable_version)
 
         # Whether to check for new builds based on a timer
         self.CheckForNewBuildsAutomatically = QCheckBox()
@@ -84,7 +103,7 @@ class BlenderBuildsTabWidget(SettingsFormWidget):
         # How often to check for new builds if ^^ enabled
         self.NewBuildsCheckFrequency = QSpinBox()
         self.NewBuildsCheckFrequency.setEnabled(get_check_for_new_builds_automatically())
-        self.NewBuildsCheckFrequency.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        self.NewBuildsCheckFrequency.setContextMenuPolicy(Qt.NoContextMenu)
         self.NewBuildsCheckFrequency.setToolTip(
             "Time in hours between new Blender builds check\
             \nDEFAULT: 12h"
@@ -102,33 +121,6 @@ class BlenderBuildsTabWidget(SettingsFormWidget):
         self.CheckForNewBuildsOnStartup.setText("On startup")
         self.CheckForNewBuildsOnStartup.setToolTip(
             "Check for new Blender builds on Blender Launcher startup\
-            \nDEFAULT: On"
-        )
-
-        # Scraping builds settings
-        self.ScrapeStableBuilds = QCheckBox(self)
-        self.ScrapeStableBuilds.setChecked(get_scrape_stable_builds())
-        self.ScrapeStableBuilds.clicked.connect(self.toggle_scrape_stable_builds)
-        self.ScrapeStableBuilds.setText("Scrape stable builds")
-        self.ScrapeStableBuilds.setToolTip(
-            "Scrape stable Blender builds\
-            \nDEFAULT: On"
-        )
-        self.ScrapeAutomatedBuilds = QCheckBox(self)
-        self.ScrapeAutomatedBuilds.setChecked(get_scrape_automated_builds())
-        self.ScrapeAutomatedBuilds.clicked.connect(self.toggle_scrape_automated_builds)
-        self.ScrapeAutomatedBuilds.setText("Scrape automated builds (daily/experimental/patch)")
-        self.ScrapeAutomatedBuilds.setToolTip(
-            "Scrape daily, experimental, and patch Blender builds\
-            \nDEFAULT: On"
-        )
-
-        self.ScrapeBfaBuilds = QCheckBox(self)
-        self.ScrapeBfaBuilds.setChecked(get_scrape_bfa_builds())
-        self.ScrapeBfaBuilds.clicked.connect(self.toggle_scrape_bfa_builds)
-        self.ScrapeBfaBuilds.setText("Scrape BforArtists builds")
-        self.ScrapeBfaBuilds.setToolTip(
-            "Scrape BForArtists builds, a popular Blender fork\
             \nDEFAULT: On"
         )
 
@@ -165,12 +157,9 @@ class BlenderBuildsTabWidget(SettingsFormWidget):
         self.scraping_builds_layout.addWidget(self.CheckForNewBuildsOnStartup, 1, 0, 1, 2)
         self.scraping_builds_layout.addWidget(QLabel("Minimum stable build to scrape", self), 2, 0, 1, 1)
         self.scraping_builds_layout.addWidget(self.MinStableBlenderVer, 2, 1, 1, 1)
-        self.scraping_builds_layout.addWidget(self.ScrapeStableBuilds, 3, 0, 1, 2)
-        self.scraping_builds_layout.addWidget(self.ScrapeAutomatedBuilds, 4, 0, 1, 2)
-        self.scraping_builds_layout.addWidget(self.ScrapeBfaBuilds, 5, 0, 1, 2)
-        self.scraping_builds_layout.addWidget(self.show_daily_archive_builds, 6, 0, 1, 2)
-        self.scraping_builds_layout.addWidget(self.show_experimental_archive_builds, 7, 0, 1, 2)
-        self.scraping_builds_layout.addWidget(self.show_patch_archive_builds, 8, 0, 1, 2)
+        self.scraping_builds_layout.addWidget(self.show_daily_archive_builds, 3, 0, 1, 2)
+        self.scraping_builds_layout.addWidget(self.show_experimental_archive_builds, 4, 0, 1, 2)
+        self.scraping_builds_layout.addWidget(self.show_patch_archive_builds, 5, 0, 1, 2)
         self.buildcheck_settings.setLayout(self.scraping_builds_layout)
 
         # Downloading builds settings
@@ -192,7 +181,7 @@ class BlenderBuildsTabWidget(SettingsFormWidget):
             \nDEFAULT: Stable Releases"
         )
         self.MarkAsFavorite.setCurrentIndex(max(get_mark_as_favorite() - 1, 0))
-        self.MarkAsFavorite.activated[str].connect(self.change_mark_as_favorite)
+        self.MarkAsFavorite.activated[int].connect(self.change_mark_as_favorite)
         self.MarkAsFavorite.setEnabled(self.EnableMarkAsFavorite.isChecked())
 
         # Install Template
@@ -231,7 +220,7 @@ class BlenderBuildsTabWidget(SettingsFormWidget):
             "Global shortcut to quickly launch Blender\
             \nDEFAULT: ctrl + f11"
         )
-        self.QuickLaunchKeySeq.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        self.QuickLaunchKeySeq.setContextMenuPolicy(Qt.NoContextMenu)
         self.QuickLaunchKeySeq.setCursorPosition(0)
         self.QuickLaunchKeySeq.editingFinished.connect(self.update_quick_launch_key_seq)
         # Run Blender using blender-launcher.exe
@@ -251,7 +240,7 @@ class BlenderBuildsTabWidget(SettingsFormWidget):
             \nDEFAULT: None\
             \nExample: --background"
         )
-        self.BlenderStartupArguments.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        self.BlenderStartupArguments.setContextMenuPolicy(Qt.NoContextMenu)
         self.BlenderStartupArguments.setCursorPosition(0)
         self.BlenderStartupArguments.editingFinished.connect(self.update_blender_startup_arguments)
         # Command Line Arguments
@@ -262,7 +251,7 @@ class BlenderBuildsTabWidget(SettingsFormWidget):
             \nDEFAULT: None\
             \nExample: env __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia nohup"
         )
-        self.BashArguments.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        self.BashArguments.setContextMenuPolicy(Qt.NoContextMenu)
         self.BashArguments.setCursorPosition(0)
         self.BashArguments.editingFinished.connect(self.update_bash_arguments)
 
@@ -280,14 +269,17 @@ class BlenderBuildsTabWidget(SettingsFormWidget):
         self.launching_settings.setLayout(self.launching_layout)
 
         # Layout
+        self.addRow(self.repo_settings)
         self.addRow(self.buildcheck_settings)
         self.addRow(self.download_settings)
         self.addRow(self.launching_settings)
 
-    def change_mark_as_favorite(self, page):
+    def change_mark_as_favorite(self, index: int):
+        page = self.MarkAsFavorite.itemText(index)
         set_mark_as_favorite(page)
 
-    def change_minimum_blender_stable_version(self, minimum):
+    def change_minimum_blender_stable_version(self, index: int):
+        minimum = self.MinStableBlenderVer.itemText(index)
         set_minimum_blender_stable_version(minimum)
 
     def update_blender_startup_arguments(self):
@@ -320,7 +312,7 @@ class BlenderBuildsTabWidget(SettingsFormWidget):
         self.QuickLaunchKeySeq.setEnabled(is_checked)
 
     def _keyPressEvent(self, e: QtGui.QKeyEvent) -> None:
-        MOD_MASK = Qt.Modifier.CTRL | Qt.Modifier.ALT | Qt.Modifier.SHIFT
+        MOD_MASK = Qt.ControlModifier | Qt.AltModifier | Qt.ShiftModifier
         key_name = ""
         key = e.key()
         modifiers = int(e.modifiers())
@@ -329,10 +321,10 @@ class BlenderBuildsTabWidget(SettingsFormWidget):
             modifiers
             and modifiers & MOD_MASK == modifiers
             and key > 0
-            and key not in {Qt.Key.Key_Shift, Qt.Key.Key_Alt, Qt.Key.Key_Control, Qt.Key.Key_Meta}
+            and key not in {Qt.Key_Shift, Qt.Key_Alt, Qt.Key_Control, Qt.Key_Meta}
         ):
             key_name = QtGui.QKeySequence(modifiers + key).toString()
-        elif not modifiers and (key != Qt.Key.Key_Meta):
+        elif not modifiers and (key != Qt.Key_Meta):
             key_name = QtGui.QKeySequence(key).toString()
 
         if key_name != "":
@@ -361,15 +353,12 @@ class BlenderBuildsTabWidget(SettingsFormWidget):
 
     def toggle_scrape_stable_builds(self, is_checked):
         set_scrape_stable_builds(is_checked)
-        self.ScrapeStableBuilds.setChecked(is_checked)
 
     def toggle_scrape_automated_builds(self, is_checked):
         set_scrape_automated_builds(is_checked)
-        self.ScrapeAutomatedBuilds.setChecked(is_checked)
 
     def toggle_scrape_bfa_builds(self, is_checked):
         set_scrape_bfa_builds(is_checked)
-        self.ScrapeAutomatedBuilds.setChecked(is_checked)
 
     def toggle_show_daily_archive_builds(self, is_checked):
         set_show_daily_archive_builds(is_checked)

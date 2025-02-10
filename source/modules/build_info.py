@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import sys
+import shlex
 from dataclasses import dataclass
 from datetime import datetime
 from functools import cache
@@ -11,7 +12,7 @@ from pathlib import Path
 
 import dateparser
 from modules._platform import _check_output, _popen, get_platform
-from modules.bl_api_manager import lts_blender_version
+from modules.bl_api_manager import lts_blender_version, read_blender_version_list
 from modules.settings import (
     get_bash_arguments,
     get_blender_startup_arguments,
@@ -19,7 +20,7 @@ from modules.settings import (
     get_library_folder,
 )
 from modules.task import Task
-from PyQt5.QtCore import pyqtSignal
+from PySide6.QtCore import Signal
 from semver import Version
 
 logger = logging.getLogger()
@@ -148,6 +149,10 @@ class BuildInfo:
     def display_label(self):
         return self._display_label(self.branch, self.semversion, self.subversion)
 
+    @property
+    def bforartist_version_matcher(self):
+        return bfa_version_matcher(self.semversion)
+
     @staticmethod
     @cache
     def _display_version(v: Version):
@@ -254,7 +259,6 @@ class BuildInfo:
 
 
 def fill_blender_info(exe: Path, info: BuildInfo | None = None) -> tuple[datetime, str, str, str]:
-
     version = _check_output([exe.as_posix(), "-v"]).decode("UTF-8")
     build_hash = ""
     subversion = ""
@@ -287,7 +291,6 @@ def fill_blender_info(exe: Path, info: BuildInfo | None = None) -> tuple[datetim
     else:
         s = version.splitlines()[0].strip()
         custom_name, subversion = s.rsplit(" ", 1)
-
 
     return (
         strptime,
@@ -354,10 +357,10 @@ def read_blender_version(
     )
 
 
-@dataclass(frozen=True)
+@dataclass
 class WriteBuildTask(Task):
-    written = pyqtSignal()
-    error = pyqtSignal()
+    written = Signal()
+    error = Signal()
 
     path: Path
     build_info: BuildInfo
@@ -408,15 +411,15 @@ def fill_build_info(
     return build_info
 
 
-@dataclass(frozen=True)
+@dataclass
 class ReadBuildTask(Task):
     path: Path
     info: BuildInfo | None = None
     archive_name: str | None = None
     auto_write: bool = True
 
-    finished = pyqtSignal(BuildInfo)
-    failure = pyqtSignal(Exception)
+    finished = Signal(BuildInfo)
+    failure = Signal(Exception)
 
     def run(self):
         try:
@@ -434,7 +437,7 @@ class ReadBuildTask(Task):
 class LaunchMode: ...
 
 
-@dataclass(frozen=True)
+@dataclass
 class LaunchWithBlendFile(LaunchMode):
     blendfile: Path
 
@@ -460,7 +463,7 @@ def get_args(info: BuildInfo, exe=None, launch_mode: LaunchMode | None = None, l
             else:
                 if (
                     get_launch_blender_no_console()
-                    and (launcher := (library_folder / info.link / "blender_launcher.exe")).exists()
+                    and (launcher := (library_folder / info.link / "blender-launcher.exe")).exists()
                 ):
                     b3d_exe = launcher
                 else:
@@ -489,7 +492,7 @@ def get_args(info: BuildInfo, exe=None, launch_mode: LaunchMode | None = None, l
 
     elif platform == "macOS":
         b3d_exe = Path(info.link) / "Blender" / "Blender.app"
-        args = f"open -W -n {b3d_exe.as_posix()} --args"
+        args = f"open -W -n {shlex.quote(b3d_exe.as_posix())} --args"
 
     if launch_mode is not None:
         if isinstance(launch_mode, LaunchWithBlendFile):
@@ -510,3 +513,15 @@ def launch_build(info: BuildInfo, exe=None, launch_mode: LaunchMode | None = Non
     args = get_args(info, exe, launch_mode)
     logger.debug(f"Running build with args {args!s}")
     return _popen(args)
+
+
+def bfa_version_matcher(blender_version: Version) -> Version | None:
+    versions = list(read_blender_version_list().keys())
+    version_foldername = f"{blender_version.major}.{blender_version.minor}"
+    for i, version in enumerate(versions):
+        if version_foldername in version:
+            if i + 1 < len(versions) and i > 0:
+                return Version.parse(versions[i - 1], optional_minor_and_patch=True)
+            else:
+                return None
+    return None

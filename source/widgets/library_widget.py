@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from items.base_list_widget_item import BaseListWidgetItem
-from modules._platform import _call, get_platform
+from modules._platform import _call, get_blender_config_folder, get_platform
 from modules.build_info import (
     BuildInfo,
     LaunchMode,
@@ -20,21 +20,23 @@ from modules.build_info import (
     launch_build,
 )
 from modules.settings import (
+    get_default_delete_action,
     get_favorite_path,
     get_library_folder,
     get_mark_as_favorite,
     set_favorite_path,
 )
 from modules.shortcut import create_shortcut
-from PyQt5 import QtCore
-from PyQt5.QtCore import Qt, pyqtSignal, pyqtSlot
-from PyQt5.QtGui import (
+from PySide6 import QtCore
+from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtGui import (
+    QAction,
     QDragEnterEvent,
     QDragLeaveEvent,
     QDropEvent,
     QHoverEvent,
 )
-from PyQt5.QtWidgets import QAction, QApplication, QHBoxLayout, QLabel, QWidget
+from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QWidget
 from threads.observer import Observer
 from threads.register import Register
 from threads.remover import RemovalTask
@@ -47,7 +49,7 @@ from widgets.datetime_widget import DateTimeWidget
 from widgets.elided_text_label import ElidedTextLabel
 from widgets.left_icon_button_widget import LeftIconButtonWidget
 from windows.custom_build_dialog_window import CustomBuildDialogWindow
-from windows.dialog_window import DialogWindow
+from windows.popup_window import PopupIcon, PopupWindow
 
 if TYPE_CHECKING:
     from windows.main_window import BlenderLauncher
@@ -56,7 +58,7 @@ logger = logging.getLogger()
 
 
 class LibraryWidget(BaseBuildWidget):
-    initialized = pyqtSignal()
+    initialized = Signal()
 
     def __init__(
         self,
@@ -123,7 +125,7 @@ class LibraryWidget(BaseBuildWidget):
         else:
             self.draw(self.parent_widget.build_info)
 
-    @pyqtSlot()
+    @Slot()
     def trigger_damaged(self):
         self.infoLabel.setText(f"Build *{Path(self.link).name}* is damaged!")
         self.launchButton.set_text("Delete")
@@ -152,7 +154,7 @@ class LibraryWidget(BaseBuildWidget):
         self.branchLabel = ElidedTextLabel(self.build_info.custom_name or self.build_info.display_label)
         self.commitTimeLabel = DateTimeWidget(self.build_info.commit_time, self.build_info.build_hash)
 
-        self.build_state_widget = BuildStateWidget(self.parent)
+        self.build_state_widget = BuildStateWidget(self.parent.icons, self)
 
         self.layout.addWidget(self.launchButton)
         self.layout.addWidget(self.subversionLabel)
@@ -186,6 +188,7 @@ class LibraryWidget(BaseBuildWidget):
         self.menu.enable_shifting()
         self.menu_extended.enable_shifting()
         self.menu.holding_shift.connect(self.update_delete_action)
+        self.menu.holding_shift.connect(self.update_config_action)
         self.menu_extended.holding_shift.connect(self.update_delete_action)
 
         self.deleteAction = QAction("Delete From Drive", self)
@@ -229,15 +232,26 @@ class LibraryWidget(BaseBuildWidget):
         self.createShortcutAction = QAction("Create Shortcut")
         self.createShortcutAction.triggered.connect(self.create_shortcut)
 
-        self.showFolderAction = QAction("Show Folder")
-        self.showFolderAction.setIcon(self.parent.icons.folder)
-        self.showFolderAction.triggered.connect(self.show_folder)
+        self.showBuildFolderAction = QAction("Show Build Folder")
+        self.showBuildFolderAction.setIcon(self.parent.icons.folder)
+        self.showBuildFolderAction.triggered.connect(self.show_build_folder)
+
+        config_path = self.make_portable_path()
+
+        self.showConfigFolderAction = QAction(
+            "Show Portable Config Folder" if config_path.is_dir() else "Show Config Folder"
+        )
+        self.showConfigFolderAction.setIcon(self.parent.icons.folder)
+        self.showConfigFolderAction.triggered.connect(self.show_config_folder)
 
         self.createSymlinkAction = QAction("Create Symlink")
         self.createSymlinkAction.triggered.connect(self.create_symlink)
 
         self.installTemplateAction = QAction("Install Template")
         self.installTemplateAction.triggered.connect(self.install_template)
+
+        self.makePortableAction = QAction("Unmake Portable" if config_path.is_dir() else "Make Portable")
+        self.makePortableAction.triggered.connect(self.make_portable)
 
         self.debugMenu = BaseMenuWidget("Debug", parent=self)
         self.debugMenu.setFont(self.parent.font_10)
@@ -277,9 +291,10 @@ class LibraryWidget(BaseBuildWidget):
         self.menu.addAction(self.createShortcutAction)
         self.menu.addAction(self.createSymlinkAction)
         self.menu.addAction(self.installTemplateAction)
+        self.menu.addAction(self.makePortableAction)
         self.menu.addSeparator()
 
-        if self.branch in ("stable", "lts", "bforartists"):
+        if self.branch in {"stable", "lts", "bforartists", "daily"}:
             self.menu.addAction(self.showReleaseNotesAction)
         else:
             regexp = re.compile(r"D\d{5}")
@@ -287,8 +302,8 @@ class LibraryWidget(BaseBuildWidget):
             if regexp.search(self.branch):
                 self.showReleaseNotesAction.setText("Show Patch Details")
                 self.menu.addAction(self.showReleaseNotesAction)
-
-        self.menu.addAction(self.showFolderAction)
+        self.menu.addAction(self.showBuildFolderAction)
+        self.menu.addAction(self.showConfigFolderAction)
         self.menu.addAction(self.editAction)
         self.menu.addAction(self.deleteAction)
 
@@ -321,6 +336,7 @@ class LibraryWidget(BaseBuildWidget):
             return
 
         self.update_delete_action(self.hovering_and_shifting)
+        self.update_config_action(self.hovering_and_shifting)
 
         if len(self.list_widget.selectedItems()) > 1:
             self.menu_extended.trigger()
@@ -335,12 +351,24 @@ class LibraryWidget(BaseBuildWidget):
 
         self.menu.trigger()
 
-    @pyqtSlot(bool)
+    @Slot(bool)
     def update_delete_action(self, shifting: bool):
-        if shifting:
+        reverted_behavior = get_default_delete_action() == 1
+        delete_from_drive = not reverted_behavior if shifting else reverted_behavior
+
+        if delete_from_drive:
             self.deleteAction.setText("Delete from Drive")
         else:
             self.deleteAction.setText("Send to Trash")
+
+    @Slot(bool)
+    def update_config_action(self, shifting: bool):
+        config_path = self.make_portable_path()
+
+        if config_path.is_dir() and not shifting:
+            self.showConfigFolderAction.setText("Show Portable Config Folder")
+        else:
+            self.showConfigFolderAction.setText("Show Config Folder")
 
     def mouseDoubleClickEvent(self, _event):
         if self.build_info is not None and self.hovering_and_shifting:
@@ -389,7 +417,7 @@ class LibraryWidget(BaseBuildWidget):
     def eventFilter(self, obj, event):
         # For detecting SHIFT
         if isinstance(event, QHoverEvent):
-            if self._hovered and event.modifiers() & Qt.Modifier.SHIFT:
+            if self._hovered and event.modifiers() & Qt.ShiftModifier:
                 self.hovering_and_shifting = True
             else:
                 self.hovering_and_shifting = False
@@ -488,7 +516,37 @@ class LibraryWidget(BaseBuildWidget):
         if self.child_widget is not None:
             self.child_widget.observer_finished()
 
-    @QtCore.pyqtSlot()
+    @Slot()
+    def make_portable(self):
+        config_path = self.make_portable_path()
+        folder_name = config_path.name
+
+        _config_path = config_path.parent / ("_" + folder_name)
+        if config_path.is_dir():
+            config_path.rename(_config_path)
+            self.makePortableAction.setText("Make Portable")
+            self.showConfigFolderAction.setText("Show Config Folder")
+        else:
+            if _config_path.is_dir():
+                _config_path.rename(config_path)
+            else:
+                config_path.mkdir(parents=False, exist_ok=True)
+            self.makePortableAction.setText("Unmake Portable")
+            self.showConfigFolderAction.setText("Show Portable Config Folder")
+
+    def make_portable_path(self):
+        version = self.build_info.subversion.rsplit(".", 1)[0]
+
+        if version >= "4.2":
+            folder_name = "portable"
+            config_path = Path(self.link) / folder_name
+        else:
+            folder_name = "config"
+            config_path = Path(self.link) / version / folder_name
+
+        return config_path
+
+    @Slot()
     def rename_branch(self):
         self.lineEdit.setText(self.branchLabel.text)
         self.lineEdit.selectAll()
@@ -496,7 +554,7 @@ class LibraryWidget(BaseBuildWidget):
         self.lineEdit.show()
         self.branchLabel.hide()
 
-    @QtCore.pyqtSlot()
+    @Slot()
     def rename_branch_accepted(self):
         self.lineEdit.hide()
         name = self.lineEdit.text().strip()
@@ -508,7 +566,7 @@ class LibraryWidget(BaseBuildWidget):
 
         self.branchLabel.show()
 
-    @QtCore.pyqtSlot()
+    @Slot()
     def rename_branch_rejected(self):
         self.lineEdit.hide()
         self.branchLabel.show()
@@ -525,23 +583,25 @@ class LibraryWidget(BaseBuildWidget):
     def build_info_writer_finished(self):
         self.build_info_writer = None
 
-    @QtCore.pyqtSlot()
+    @Slot()
     def ask_remove_from_drive(self):
-
-        # if not shift clicked, ask to send to trash instead of deleting
+        reverted_behavior = get_default_delete_action() == 1
         mod = QApplication.keyboardModifiers()
-        if mod not in (Qt.KeyboardModifier.ShiftModifier, Qt.KeyboardModifier.ControlModifier):
+        is_shift_pressed = mod == Qt.KeyboardModifier.ShiftModifier
+
+        # if not shift clicked (or reversed action), ask to send to trash instead of deleting
+        if (not is_shift_pressed and not reverted_behavior) or (is_shift_pressed and reverted_behavior):
             self.ask_send_to_trash()
             return
 
         self.item.setSelected(True)
-        self.dlg = DialogWindow(
+        self.dlg = PopupWindow(
             parent=self.parent,
             title="Warning",
-            text="Are you sure you want to<br> \
+            message="Are you sure you want to<br> \
                   delete selected builds?",
-            accept_text="Yes",
-            cancel_text="No",
+            icon=PopupIcon.NONE,
+            buttons=["Yes", "No"],
         )
 
         if len(self.list_widget.selectedItems()) > 1:
@@ -549,12 +609,12 @@ class LibraryWidget(BaseBuildWidget):
         else:
             self.dlg.accepted.connect(self.remove_from_drive)
 
-    @QtCore.pyqtSlot()
+    @Slot()
     def remove_from_drive_extended(self):
         for item in self.list_widget.selectedItems():
             self.list_widget.itemWidget(item).remove_from_drive()
 
-    @QtCore.pyqtSlot()
+    @Slot()
     def remove_from_drive(self, trash=False):
         if self.parent_widget is not None:
             self.parent_widget.remove_from_drive()
@@ -566,16 +626,16 @@ class LibraryWidget(BaseBuildWidget):
         self.parent.task_queue.append(a)
         self.remover_started()
 
-    @QtCore.pyqtSlot()
+    @Slot()
     def ask_send_to_trash(self):
         self.item.setSelected(True)
-        self.dlg = DialogWindow(
+        self.dlg = PopupWindow(
             parent=self.parent,
             title="Warning",
-            text="Are you sure you want to<br> \
+            message="Are you sure you want to<br> \
                   send selected builds to trash?",
-            accept_text="Yes",
-            cancel_text="No",
+            icon=PopupIcon.NONE,
+            buttons=["Yes", "No"],
         )
 
         if len(self.list_widget.selectedItems()) > 1:
@@ -583,12 +643,12 @@ class LibraryWidget(BaseBuildWidget):
         else:
             self.dlg.accepted.connect(self.send_to_trash)
 
-    @QtCore.pyqtSlot()
+    @Slot()
     def send_to_trash_extended(self):
         for item in self.list_widget.selectedItems():
             self.list_widget.itemWidget(item).remove_from_drive(trash=True)
 
-    @QtCore.pyqtSlot()
+    @Slot()
     def send_to_trash(self):
         self.remove_from_drive(trash=True)
 
@@ -617,19 +677,19 @@ class LibraryWidget(BaseBuildWidget):
         self.setEnabled(True)
         return
 
-    @QtCore.pyqtSlot()
+    @Slot()
     def edit_build(self):
         assert self.build_info is not None
         dlg = CustomBuildDialogWindow(self.parent, Path(self.build_info.link), self.build_info)
         dlg.accepted.connect(self.build_info_edited)
 
-    @QtCore.pyqtSlot(BuildInfo)
+    @Slot(BuildInfo)
     def build_info_edited(self, blinfo: BuildInfo):
         self.list_widget.remove_item(self.item)
         blinfo.write_to(Path(blinfo.link))
         self.parent.draw_to_library(Path(blinfo.link), show_new=True)
 
-    @QtCore.pyqtSlot()
+    @Slot()
     def add_to_quick_launch(self):
         if (self.parent.favorite is not None) and (self.parent.favorite.link != self.link):
             self.parent.favorite.remove_from_quick_launch()
@@ -649,7 +709,7 @@ class LibraryWidget(BaseBuildWidget):
             self.child_widget.launchButton.setIcon(self.parent.icons.quick_launch)
             self.child_widget.addToQuickLaunchAction.setEnabled(False)
 
-    @QtCore.pyqtSlot()
+    @Slot()
     def remove_from_quick_launch(self):
         self.launchButton.setIcon(self.parent.icons.fake)
         self.addToQuickLaunchAction.setEnabled(True)
@@ -663,7 +723,7 @@ class LibraryWidget(BaseBuildWidget):
             self.child_widget.launchButton.setIcon(self.parent.icons.fake)
             self.child_widget.addToQuickLaunchAction.setEnabled(True)
 
-    @QtCore.pyqtSlot()
+    @Slot()
     def add_to_favorites(self):
         item = BaseListWidgetItem()
         widget = LibraryWidget(self.parent, item, self.link, self.parent.UserFavoritesListWidget, parent_widget=self)
@@ -678,7 +738,7 @@ class LibraryWidget(BaseBuildWidget):
             self.build_info.is_favorite = True
             self.write_build_info()
 
-    @QtCore.pyqtSlot()
+    @Slot()
     def remove_from_favorites(self):
         widget = self.parent_widget or self
         assert widget.child_widget is not None
@@ -693,13 +753,13 @@ class LibraryWidget(BaseBuildWidget):
         self.build_info_writer = WriteBuildTask(self.link, self.build_info)
         self.parent.task_queue.append(self.build_info_writer)
 
-    @QtCore.pyqtSlot()
+    @Slot()
     def register_extension(self):
         path = Path(get_library_folder()) / self.link
         self.register = Register(path)
         self.register.start()
 
-    @QtCore.pyqtSlot()
+    @Slot()
     def create_shortcut(self):
         assert self.build_info is not None
         name = "Blender {} {}".format(
@@ -709,7 +769,7 @@ class LibraryWidget(BaseBuildWidget):
 
         create_shortcut(self.link, name)
 
-    @QtCore.pyqtSlot()
+    @Slot()
     def create_symlink(self):
         target = self.link.as_posix()
         link = (Path(get_library_folder()) / "bl_symlink").as_posix()
@@ -726,16 +786,85 @@ class LibraryWidget(BaseBuildWidget):
 
             os.symlink(target, link)
 
-    @QtCore.pyqtSlot()
-    def show_folder(self):
+    @Slot()
+    def show_folder(self, folder_path: Path):
+        if not folder_path:
+            logger.debug("Path is empty or not specified.")
+            return
+
+        if not os.path.isdir(folder_path):
+            logger.error(f"Path {folder_path} do not exist.")
+            return
+
         platform = get_platform()
-        library_folder = Path(get_library_folder())
-        folder = library_folder / self.link
 
         if platform == "Windows":
-            os.startfile(folder.as_posix())
+            os.startfile(folder_path.as_posix())
         elif platform == "Linux":
-            subprocess.call(["xdg-open", folder.as_posix()])
+            # Use specific file managers known to be common in Linux
+            try:
+                subprocess.call(["xdg-open", folder_path.as_posix()])
+            except FileNotFoundError:
+                # Try known file managers if xdg-open fails
+                for fm in ["nautilus", "dolphin", "thunar", "pcmanfm", "nemo"]:
+                    if subprocess.call([fm, folder_path.as_posix()]) == 0:
+                        return
+                logger.error("No file manager found to open the folder.")
+
+    @Slot()
+    def show_build_folder(self):
+        library_folder = Path(get_library_folder())
+        path = library_folder / self.link
+        self.show_folder(path)
+
+    @Slot()
+    def show_config_folder(self):
+        mod = QApplication.keyboardModifiers()
+        is_shift_pressed = mod == Qt.KeyboardModifier.ShiftModifier
+        config_path = self.make_portable_path()
+
+        if config_path.is_dir() and not is_shift_pressed:
+            self.show_folder(config_path)
+            return
+
+        if self.build_info is None:
+            PopupWindow(
+                title="Warning",
+                info_popup=True,
+                message="No build information found.",
+                icon=PopupIcon.WARNING,
+                parent=self.parent,
+            ).show()
+            return
+        version = self.build_info.semversion
+        branch = self.build_info.branch
+        custom_folder = None
+
+        if branch == "bforartists":
+            custom_folder = "bforartists"
+            version = self.build_info.bforartist_version_matcher
+
+        if version is None:
+            version_str = ""
+        else:
+            version_str = f"{version.major}.{version.minor}"
+
+        path = Path(get_blender_config_folder(custom_folder) / version_str)
+        general_path = Path(get_blender_config_folder(custom_folder))
+
+        if not path.is_dir():
+            popup = PopupWindow(
+                title="Warning",
+                message="No config folder found for this version.",
+                buttons=["Open General Config Folder", "Cancel"],
+                icon=PopupIcon.WARNING,
+                parent=self.parent,
+            )
+            popup.accepted.connect(lambda: self.show_folder(general_path))
+            popup.show()
+            return
+
+        self.show_folder(path)
 
     def list_widget_deleted(self):
         self.list_widget = None

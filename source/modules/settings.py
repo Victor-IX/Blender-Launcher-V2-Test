@@ -11,7 +11,7 @@ from pathlib import Path
 from modules._platform import get_config_file, get_config_path, get_cwd, get_platform, local_config, user_config
 from modules.bl_api_manager import dropdown_blender_version
 from modules.version_matcher import VersionSearchQuery
-from PyQt5.QtCore import QSettings
+from PySide6.QtCore import QSettings
 from semver import Version
 
 EPOCH = datetime.fromtimestamp(0, tz=timezone.utc)
@@ -22,22 +22,23 @@ ISO_EPOCH = EPOCH.isoformat()
 tabs = {
     "Library": 0,
     "Downloads": 1,
-    "User": 2,
+    "Favorites": 2,
 }
 
 library_pages = {
     "Stable Releases": 0,
     "Daily Builds": 1,
     "Experimental Branches": 2,
+    "Bforartists": 3,
+    "Custom": 4,
 }
-
 
 downloads_pages = {
     "Stable Releases": 0,
     "Daily Builds": 1,
     "Experimental Branches": 2,
+    "Bforartists": 3,
 }
-
 
 favorite_pages = {
     "Disable": 0,
@@ -45,7 +46,6 @@ favorite_pages = {
     "Daily Builds": 2,
     "Experimental Branches": 3,
 }
-
 
 library_subfolders = [
     "custom",
@@ -55,13 +55,17 @@ library_subfolders = [
     "template",
 ]
 
-
 proxy_types = {
     "None": 0,
     "HTTP": 1,
     "HTTPS": 2,
     "SOCKS4": 3,
     "SOCKS5": 4,
+}
+
+delete_action = {
+    "Send to Trash": 0,
+    "Delete Permanently": 1,
 }
 
 
@@ -73,13 +77,18 @@ def get_settings():
     return QSettings(get_config_file().as_posix(), QSettings.Format.IniFormat)
 
 
+def get_actual_library_folder_no_fallback():
+    v = get_settings().value("library_folder")
+    if v:
+        return Path(v)
+    return None
+
+
 def get_actual_library_folder():
     settings = get_settings()
     library_folder = settings.value("library_folder")
-
     if not is_library_folder_valid(library_folder):
         library_folder = get_cwd()
-        settings.setValue("library_folder", library_folder)
 
     return Path(library_folder)
 
@@ -198,14 +207,6 @@ def get_enable_high_dpi_scaling():
 
 def set_enable_high_dpi_scaling(is_checked):
     get_settings().setValue("enable_high_dpi_scaling", is_checked)
-
-
-def get_sync_library_and_downloads_pages():
-    return get_settings().value("sync_library_and_downloads_pages", defaultValue=True, type=bool)
-
-
-def set_sync_library_and_downloads_pages(is_checked):
-    get_settings().setValue("sync_library_and_downloads_pages", is_checked)
 
 
 def get_default_library_page():
@@ -481,6 +482,38 @@ def set_scrape_bfa_builds(b: bool):
     get_settings().setValue("scrape_bfa_builds", b)
 
 
+def get_show_stable_builds() -> bool:
+    return get_settings().value("show_stable_builds", defaultValue=True, type=bool)
+
+
+def set_show_stable_builds(b: bool):
+    get_settings().setValue("show_stable_builds", b)
+
+
+def get_show_daily_builds() -> bool:
+    return get_settings().value("show_daily_builds", defaultValue=True, type=bool)
+
+
+def set_show_daily_builds(b: bool):
+    get_settings().setValue("show_daily_builds", b)
+
+
+def get_show_experimental_and_patch_builds() -> bool:
+    return get_settings().value("show_experimental_and_patch_builds", defaultValue=True, type=bool)
+
+
+def set_show_experimental_and_patch_builds(b: bool):
+    get_settings().setValue("show_experimental_and_patch_builds", b)
+
+
+def get_show_bfa_builds() -> bool:
+    return get_settings().value("show_bfa_builds", defaultValue=True, type=bool)
+
+
+def set_show_bfa_builds(b: bool):
+    get_settings().setValue("show_bfa_builds", b)
+
+
 def get_show_daily_archive_builds() -> bool:
     return get_settings().value("show_daily_archive_builds", defaultValue=False, type=bool)
 
@@ -573,6 +606,22 @@ def get_launch_timer_duration() -> int:
 def set_launch_timer_duration(duration: int):
     """Sets the launch timer duration, in seconds"""
     get_settings().setValue("launch_timer", duration)
+
+
+def get_first_time_setup_seen():
+    return get_settings().value("first_time_setup_seen", defaultValue=False, type=bool)
+
+
+def set_first_time_setup_seen(b: bool):
+    get_settings().setValue("first_time_setup_seen", b)
+
+
+def get_default_delete_action() -> int:
+    return get_settings().value("default_delete_action", defaultValue=0, type=int)
+
+
+def set_default_delete_action(action):
+    get_settings().setValue("default_delete_action", delete_action[action])
 
 
 def migrate_config(force=False):

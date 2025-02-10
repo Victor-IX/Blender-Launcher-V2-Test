@@ -7,7 +7,6 @@ from pathlib import Path
 from modules.settings import (
     get_actual_library_folder,
     get_config_file,
-    get_cwd,
     get_launch_minimized_to_tray,
     get_launch_timer_duration,
     get_launch_when_system_starts,
@@ -16,7 +15,9 @@ from modules.settings import (
     get_show_tray_icon,
     get_use_pre_release_builds,
     get_worker_thread_count,
+    get_default_delete_action,
     migrate_config,
+    delete_action,
     set_launch_minimized_to_tray,
     set_launch_timer_duration,
     set_launch_when_system_starts,
@@ -24,14 +25,23 @@ from modules.settings import (
     set_show_tray_icon,
     set_use_pre_release_builds,
     set_worker_thread_count,
+    set_default_delete_action,
     user_config,
 )
 from modules.shortcut import generate_program_shortcut, get_default_shortcut_destination, get_shortcut_type
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QCheckBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QGridLayout,
+    QLabel,
+    QPushButton,
+    QSpinBox,
+    QComboBox,
+)
+from widgets.folder_select import FolderSelector
 from widgets.settings_form_widget import SettingsFormWidget
 from widgets.settings_window.settings_group import SettingsGroup
-from windows.dialog_window import DialogWindow
+from windows.popup_window import PopupWindow, PopupIcon
 from windows.file_dialog_window import FileDialogWindow
 
 
@@ -44,23 +54,11 @@ class GeneralTabWidget(SettingsFormWidget):
         self.application_settings = SettingsGroup("Application", parent=self)
 
         # Library Folder
-        self.LibraryFolderLayoutLabel = QLabel()
-        self.LibraryFolderLayoutLabel.setText("Library Folder:")
-        self.LibraryFolderLineEdit = QLineEdit()
-        self.LibraryFolderLineEdit.setText(str(get_actual_library_folder()))
-        self.LibraryFolderLineEdit.setToolTip("The folder where the app will store Blender builds.")
-        self.LibraryFolderLineEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.LibraryFolderLineEdit.setReadOnly(True)
-        self.LibraryFolderLineEdit.setCursorPosition(0)
-        self.SetLibraryFolderButton = QPushButton(self.parent.icons.folder, "")
-        self.SetLibraryFolderButton.setFixedWidth(25)
-        self.SetLibraryFolderButton.clicked.connect(self.prompt_library_folder)
-        self.SetLibraryFolderButton.clicked.connect(self.prompt_library_folder)
-
-        self.LibraryFolderLayout = QHBoxLayout()
-        self.LibraryFolderLayout.setSpacing(0)
-        self.LibraryFolderLayout.addWidget(self.LibraryFolderLineEdit)
-        self.LibraryFolderLayout.addWidget(self.SetLibraryFolderButton)
+        self.LibraryFolderLabel = QLabel()
+        self.LibraryFolderLabel.setText("Library Folder:")
+        self.LibraryFolder = FolderSelector(parent, default_folder=get_actual_library_folder())
+        self.LibraryFolder.validity_changed.connect(self.library_folder_validity_changed)
+        self.LibraryFolder.folder_changed.connect(self.set_library_folder_)
 
         # Launch When System Starts
         self.LaunchWhenSystemStartsCheckBox = QCheckBox()
@@ -130,8 +128,8 @@ class GeneralTabWidget(SettingsFormWidget):
 
         # Layout
         self.application_layout = QGridLayout()
-        self.application_layout.addWidget(self.LibraryFolderLayoutLabel, 0, 0, 1, 1)
-        self.application_layout.addLayout(self.LibraryFolderLayout, 1, 0, 1, 3)
+        self.application_layout.addWidget(self.LibraryFolderLabel, 0, 0, 1, 1)
+        self.application_layout.addWidget(self.LibraryFolder, 1, 0, 1, 3)
         if get_platform() == "Windows":
             self.application_layout.addWidget(self.LaunchWhenSystemStartsCheckBox, 2, 0, 1, 1)
         self.application_layout.addWidget(self.ShowTrayIconCheckBox, 3, 0, 1, 1)
@@ -150,6 +148,7 @@ class GeneralTabWidget(SettingsFormWidget):
 
             self.addRow(self.migrate_button)
 
+        # File Association
         self.file_association_group = SettingsGroup("File association", parent=self)
         layout = QGridLayout()
         self.create_shortcut_button = QPushButton(f"Create {get_shortcut_type()}", parent=self.file_association_group)
@@ -195,43 +194,42 @@ class GeneralTabWidget(SettingsFormWidget):
         self.file_association_group.setLayout(layout)
         self.addRow(self.file_association_group)
 
+        self.advanced_settings = SettingsGroup("Advanced", parent=self)
+        self.default_delete_action = QComboBox()
+        self.default_delete_action.addItems(delete_action.keys())
+        self.default_delete_action.setToolTip(
+            "Set the default action available in the right click menu for deleting a build\
+            \nThe other option is available when holding the shift key\
+            \nDEFAULT: Send to Trash"
+        )
+        self.default_delete_action.setCurrentIndex(get_default_delete_action())
+        self.default_delete_action.activated[int].connect(self.change_default_delete_action)
+
+        self.advanced_layout = QGridLayout()
+        self.advanced_layout.addWidget(QLabel("Default Delete Action"), 0, 0, 1, 1)
+        self.advanced_layout.addWidget(self.default_delete_action, 0, 1, 1, 1)
+        self.advanced_settings.setLayout(self.advanced_layout)
+        self.addRow(self.advanced_settings)
+
     def prompt_library_folder(self):
         library_folder = str(get_library_folder())
         new_library_folder = FileDialogWindow().get_directory(self, "Select Library Folder", library_folder)
         if new_library_folder and (library_folder != new_library_folder):
             self.set_library_folder(Path(new_library_folder))
 
-    def set_library_folder(self, folder: Path, relative: bool | None = None):
-        if folder.is_relative_to(get_cwd()):
-            if relative is None:
-                self.dlg = DialogWindow(
-                    parent=self.parent,
-                    title="Setup",
-                    text="The selected path is relative to the executable's path.<br>\
-                        Would you like to save it as relative?<br>\
-                        This is useful if the folder may move.",
-                    accept_text="Yes",
-                    cancel_text="No",
-                )
-                self.dlg.accepted.connect(lambda: self.set_library_folder(folder, True))
-                self.dlg.cancelled.connect(lambda: self.set_library_folder(folder, False))
-                return
+    def set_library_folder_(self, p: Path):
+        print("SETTTE", p)
+        set_library_folder(str(p))
 
-            if relative:
-                folder = folder.relative_to(get_cwd())
-
-        if set_library_folder(str(folder)) is True:
-            self.LibraryFolderLineEdit.setText(str(get_actual_library_folder()))
-            self.parent.draw_library(clear=True)
-        else:
-            self.dlg = DialogWindow(
+    def library_folder_validity_changed(self, v: bool):
+        if not v:
+            self.dlg = PopupWindow(
                 parent=self.parent,
                 title="Warning",
-                text="Selected folder doesn't have write permissions!",
-                accept_text="Retry",
-                cancel_text=None,
+                message="Selected folder doesn't have write permissions!",
+                button="Quit",
             )
-            self.dlg.accepted.connect(self.prompt_library_folder)
+            self.dlg.accepted.connect(self.LibraryFolder.button.clicked.emit)
 
     def toggle_launch_when_system_starts(self, is_checked):
         set_launch_when_system_starts(is_checked)
@@ -260,10 +258,16 @@ class GeneralTabWidget(SettingsFormWidget):
         set_use_pre_release_builds(is_checked)
 
     def migrate_confirmation(self):
+        title = "Info"
         text = f"Are you sure you want to move<br>{get_config_file()}<br>to<br>{user_config()}?"
+        button = "Migrate, Cancel"
+        icon = PopupIcon.NONE
         if user_config().exists():
+            title = "Warning"
             text = f'<font color="red">WARNING:</font> The user settings already exist!<br>{text}'
-        dlg = DialogWindow(text=text, parent=self.parent)
+            button = "Overwrite, Cancel"
+            icon = PopupIcon.WARNING
+        dlg = PopupWindow(title=title, text=text, button=button, icon=icon, parent=self.parent)
         dlg.accepted.connect(self.migrate)
 
     def migrate(self):
@@ -288,3 +292,7 @@ class GeneralTabWidget(SettingsFormWidget):
         else:
             self.register_file_association_button.setEnabled(True)
             self.unregister_file_association_button.setEnabled(False)
+
+    def change_default_delete_action(self, index: int):
+        action = self.default_delete_action.itemText(index)
+        set_default_delete_action(action)

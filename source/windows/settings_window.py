@@ -8,19 +8,19 @@ from modules.settings import (
     get_proxy_port,
     get_proxy_type,
     get_proxy_user,
-    get_user_id,
     get_quick_launch_key_seq,
     get_use_custom_tls_certificates,
+    get_user_id,
     get_worker_thread_count,
     proxy_types,
 )
-from PyQt5.QtCore import QSize, Qt
-from PyQt5.QtWidgets import QSizePolicy, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtWidgets import QSizePolicy, QTabWidget, QVBoxLayout, QWidget
 from widgets.header import WindowHeader
 from widgets.settings_window import appearance_tab, blender_builds_tab, connection_tab, general_tab
 from widgets.tab_widget import TabWidget
 from windows.base_window import BaseWindow
-from windows.dialog_window import DialogWindow
+from windows.popup_window import PopupWindow, PopupIcon
 
 
 class SettingsWindow(BaseWindow):
@@ -36,7 +36,7 @@ class SettingsWindow(BaseWindow):
         sizePolicy.setVerticalStretch(0)
         sizePolicy.setHeightForWidth(self.sizePolicy().hasHeightForWidth())
         self.setSizePolicy(sizePolicy)
-        self.setMinimumSize(QSize(480, 100))
+        self.setMinimumSize(QSize(480, 744))
         self.CentralWidget = QWidget(self)
         self.CentralLayout = QVBoxLayout(self.CentralWidget)
         self.CentralLayout.setContentsMargins(1, 1, 1, 1)
@@ -187,13 +187,13 @@ class SettingsWindow(BaseWindow):
         for s in pending:
             pending_to_restart += "<br>- " + s
 
-        self.dlg = DialogWindow(
+        self.dlg = PopupWindow(
             parent=self.parent,
             title="Warning",
-            text=f"Restart Blender Launcher in<br> \
+            message=f"Restart Blender Launcher in<br> \
                   order to apply following settings:{pending_to_restart}",
-            accept_text="Restart Now",
-            cancel_text="Ignore",
+            buttons=["Restart Now", "Ignore"],
+            icon=PopupIcon.WARNING,
         )
         self.dlg.accepted.connect(self.restart_app)
         self.dlg.cancelled.connect(self.attempt_close)
@@ -215,4 +215,5 @@ class SettingsWindow(BaseWindow):
             event.ignore()
         else:
             self.parent.settings_window = None
+            self.parent.update_visible_lists()
             event.accept()

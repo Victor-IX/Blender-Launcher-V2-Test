@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gettext
 import logging
+import logging.handlers
 import os
 import sys
 from argparse import ArgumentParser
@@ -14,9 +15,9 @@ from modules._platform import _popen, get_cache_path, get_cwd, get_launcher_name
 from modules.cli_launching import cli_launch
 from modules.shortcut import register_windows_filetypes, unregister_windows_filetypes
 from modules.version_matcher import VALID_FULL_QUERIES, VALID_QUERIES, VERSION_SEARCH_SYNTAX
-from PyQt5.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 from semver import Version
-from windows.dialog_window import DialogWindow
+from windows.popup_window import PopupWindow, PopupIcon
 
 LOG_COLORS = {
     "DEBUG": "\033[36m",  # Cyan
@@ -38,9 +39,9 @@ class ColoredFormatter(logging.Formatter):
 
 version = Version(
     2,
-    3,
+    4,
     0,
-    prerelease="rc.2",
+    prerelease="rc.5",
 )
 
 _ = gettext.gettext
@@ -51,7 +52,18 @@ cache_path = Path(get_cache_path())
 if not cache_path.is_dir():
     cache_path.mkdir()
 color_formatter = ColoredFormatter(_format)
-file_handler = logging.FileHandler(cache_path.absolute() / "Blender Launcher.log")
+
+try:
+    file_handler = logging.handlers.RotatingFileHandler(
+        cache_path.absolute() / "Blender Launcher.log",
+        maxBytes=10 * 1024 * 1024,  # 10 MB
+        backupCount=2,
+    )
+    file_handler.setFormatter(logging.Formatter(_format))
+    file_handler.doRollover()
+except PermissionError:
+    file_handler = logging.FileHandler(cache_path.absolute() / "Blender Launcher.log")
+
 stream_handler = logging.StreamHandler(stream=sys.stdout)
 stream_handler.setFormatter(color_formatter)
 
@@ -100,10 +112,16 @@ def main():
 
     parser.add_argument("-d", "-debug", "--debug", help="Enable debug logging.", action="store_true")
     parser.add_argument("-set-library-folder", help="Set library folder", type=Path)
+    parser.add_argument("-force-first-time", help="Force the first time setup", action="store_true")
     parser.add_argument(
         "--offline",
         "-offline",
         help="Run the application offline. (Disables scraper threads and update checks)",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--build-cache",
+        help="Launch the app and cache all the available builds.",
         action="store_true",
     )
     parser.add_argument(
@@ -169,7 +187,8 @@ def main():
     logger.info(f"Blender Launcher Version: {version}")
 
     # Create an instance of application and set its core properties
-    app = QApplication([])
+    app = QApplication(["blender-launcher-v2"])
+    app.setApplicationName("blender-launcher-v2")
     app.setStyle("Fusion")
     app.setApplicationVersion(str(version))
 
@@ -195,7 +214,13 @@ def main():
 
     app.setQuitOnLastWindowClosed(False)
 
-    BlenderLauncher(app=app, version=version, offline=args.offline)
+    BlenderLauncher(
+        app=app,
+        version=version,
+        offline=args.offline,
+        build_cache=args.build_cache,
+        force_first_time=args.force_first_time,
+    )
     sys.exit(app.exec())
 
 
@@ -206,14 +231,13 @@ def start_set_library_folder(app: QApplication, lib_folder: str):
         logging.info(f"Library folder set to {lib_folder!s}")
     else:
         logging.error("Failed to set library folder")
-        dlg = DialogWindow(
+        PopupWindow(
             title="Warning",
-            text="Passed path is not a valid folder or<br>it doesn't have write permissions!",
-            accept_text="Quit",
-            cancel_text=None,
+            message="Passed path is not a valid folder or<br>it doesn't have write permissions!",
+            icon=PopupIcon.WARNING,
+            button="Quit",
             app=app,
-        )
-        dlg.show()
+        ).show()
         sys.exit(app.exec())
 
 
@@ -293,8 +317,8 @@ def start_unregister():
 
 
 def check_for_instance():
-    from PyQt5.QtCore import QByteArray
-    from PyQt5.QtNetwork import QLocalSocket
+    from PySide6.QtCore import QByteArray
+    from PySide6.QtNetwork import QLocalSocket
 
     socket = QLocalSocket()
     socket.connectToServer("blender-launcher-server")

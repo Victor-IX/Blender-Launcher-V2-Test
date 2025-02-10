@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Literal
 from modules.build_info import BuildInfo, ReadBuildTask, parse_blender_ver
 from modules.enums import MessageType
 from modules.settings import get_install_template, get_library_folder
-from PyQt5.QtCore import Qt, pyqtSignal, pyqtSlot
-from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 from semver import Version
 from threads.downloader import DownloadTask
 from threads.extractor import ExtractTask
@@ -36,7 +36,7 @@ class DownloadState(Enum):
 
 
 class DownloadWidget(BaseBuildWidget):
-    focus_installed_widget = pyqtSignal(BaseBuildWidget)
+    focus_installed_widget = Signal(BaseBuildWidget)
 
     def __init__(self, parent: BlenderLauncher, list_widget, item, build_info, installed, show_new=False):
         super().__init__(parent=parent)
@@ -96,7 +96,7 @@ class DownloadWidget(BaseBuildWidget):
 
         self.branchLabel = ElidedTextLabel(self.build_info.display_label, self)
         self.commitTimeLabel = DateTimeWidget(self.build_info.commit_time, self.build_info.build_hash, self)
-        self.build_state_widget = BuildStateWidget(parent, self)
+        self.build_state_widget = BuildStateWidget(parent.icons, self)
 
         self.build_info_hl.addWidget(self.subversionLabel)
         self.build_info_hl.addWidget(self.branchLabel, stretch=1)
@@ -121,7 +121,7 @@ class DownloadWidget(BaseBuildWidget):
         else:
             self.installedButton.hide()
 
-        if self.build_info.branch in "stable lts":
+        if self.build_info.branch in {"stable", "lts", "daily", "bforartists"}:
             self.menu.addAction(self.showReleaseNotesAction)
         else:
             regexp = re.compile(r"D\d{5}")
@@ -145,7 +145,7 @@ class DownloadWidget(BaseBuildWidget):
         elif self.installed:
             self.focus_installed()
 
-    @pyqtSlot()
+    @Slot()
     def focus_installed(self):
         self.focus_installed_widget.emit(self.installed)
 
@@ -267,7 +267,7 @@ class DownloadWidget(BaseBuildWidget):
                 build_hash=None,
                 commit_time=self.build_info.commit_time,
                 branch=self.build_info.branch,
-                custom_executable=self.build_info.custom_executable
+                custom_executable=self.build_info.custom_executable,
             ),
             archive_name=archive_name,
         )
@@ -321,7 +321,7 @@ class DownloadWidget(BaseBuildWidget):
             self.progressBar.hide()
             self.installed = build_widget
 
-    @pyqtSlot()
+    @Slot()
     def uninstalled(self):
         self.installedButton.hide()
         self.downloadButton.show()

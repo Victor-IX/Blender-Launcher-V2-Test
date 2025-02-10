@@ -3,12 +3,13 @@ import re
 import webbrowser
 from pathlib import PurePosixPath
 
-from PyQt5 import QtCore
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QAction, QWidget
-from widgets.base_menu_widget import BaseMenuWidget
-from threads.scraper import BFA_NC_WEBDAV_URL, BFA_NC_WEBDAV_SHARE_TOKEN, get_bfa_nc_https_download_url
+from PySide6 import QtCore
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction
+from PySide6.QtWidgets import QWidget
+from threads.scraper import BFA_NC_WEBDAV_SHARE_TOKEN, BFA_NC_WEBDAV_URL, get_bfa_nc_https_download_url
 from webdav4.client import Client
+from widgets.base_menu_widget import BaseMenuWidget
 
 
 class BaseBuildWidget(QWidget):
@@ -29,14 +30,16 @@ class BaseBuildWidget(QWidget):
     def context_menu(self):
         pass
 
-    @QtCore.pyqtSlot()
+    @QtCore.Slot()
     def show_release_notes(self):
-        if self.build_info.branch == "stable":
+        branch = self.build_info.branch
+
+        if branch in {"stable", "daily"}:
             # TODO Check format for Blender 3 release
             # Extract X.X format version
             ver = self.build_info.semversion
             webbrowser.open(f"https://wiki.blender.org/wiki/Reference/Release_Notes/{ver.major}.{ver.minor}")
-        elif self.build_info.branch == "lts":
+        elif branch == "lts":
             # Raw numbers from version
             v = re.sub(r"\D", "", str(self.build_info.semversion.finalize_version()))
 
@@ -45,7 +48,9 @@ class BaseBuildWidget(QWidget):
             ver = self.build_info.semversion
             client = Client(BFA_NC_WEBDAV_URL, auth=(BFA_NC_WEBDAV_SHARE_TOKEN, ""))
             try:
-                entries = client.ls(f"/Bforartists {ver.major}.{ver.minor}.{ver.patch}", detail=True, allow_listing_resource=True)
+                entries = client.ls(
+                    f"/Bforartists {ver.major}.{ver.minor}.{ver.patch}", detail=True, allow_listing_resource=True
+                )
                 for e in entries:
                     path = PurePosixPath(e["name"])
                     if path.name.lower().startswith("releasenotes"):
@@ -54,6 +59,6 @@ class BaseBuildWidget(QWidget):
                 pass
         else:  # Open for builds with D12345 name pattern
             # Extract only D12345 substring
-            m = re.search(r"D\d{5}", self.build_info.branch)
+            m = re.search(r"D\d{5}", branch)
 
             webbrowser.open(f"https://developer.blender.org/{m.group(0)}")
