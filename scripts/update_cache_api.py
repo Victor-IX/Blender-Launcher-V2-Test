@@ -41,7 +41,7 @@ for source_file, destination_file in files.items():
                 destination_data["api_file_version"] = "1.0"
 
             with open(destination_file_path, "w") as dest_file:
-                json.dump(destination_data, dest_file, indent=4)
+                json.dump(destination_data, dest_file, indent=1)
 
             # Use git to check if the file has been modified (not only the file verison)
             result = subprocess.run(["git", "diff", "--numstat", destination_file_path], capture_output=True, text=True)
