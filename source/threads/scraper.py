@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import sys
 import json
 import logging
 import re
@@ -539,6 +540,16 @@ class Scraper(QThread):
 
         if cache_modified:
             cache_path = self.cache_path
+            new_file_ver = "0.1"
+            # Get Local API file instead of the generated one
+            # TODO: Make a function to get app file path if not already done
+            if self.build_cache:
+                cache_path = (
+                    Path(sys._MEIPASS) / f"files/stable_builds_api_{get_platform().lower()}.json"
+                    if getattr(sys, "frozen", False)
+                    else Path(f"source/resources/api/stable_builds_api_{get_platform().lower()}.json").resolve()
+                )
+                new_file_ver = "1.0"
 
             try:
                 with open(cache_path) as f:
@@ -553,14 +564,12 @@ class Scraper(QThread):
                     logger.debug(f"Updating cache file version to {new_file_ver}")
             except json.JSONDecodeError:
                 logger.error("Failed to read api_file_version file. Using default 0.1")
-                new_file_ver = "0.1"
             except ValueError:
                 logger.error("Invalid api_file_version version format. Using default 0.1")
-                new_file_ver = "0.1"
             except Exception as e:
                 logger.error(f"Failed to read api_file_version version, using default 0.1: {e}")
-                new_file_ver = "0.1"
 
+            cache_path = self.cache_path
             cache_data = self.cache.to_dict()
             cache_data = {"api_file_version": new_file_ver, **cache_data}
 
