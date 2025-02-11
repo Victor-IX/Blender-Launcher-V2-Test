@@ -2,8 +2,6 @@ name: API Cache Update
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 0 * * 1"
 
 jobs:
   build:
@@ -22,18 +20,18 @@ jobs:
           .venv\Scripts\activate
           echo "Installing dependencies"
           pip install -e ./
-      # - name: Run Blender Launcher Caching
-      #   run: |
-      #     .venv\Scripts\activate
-      #     echo "Building style"
-      #     python build_style.py
-      #     echo "Set Settings"
-      #     python scripts/set_default_settings.py
-      #     echo "Building Cache"
-      #     python source/main.py --build-cache &
-      #     sleep 240
-      #     echo "Updating Cache API files"
-      #     python scripts/update_cache_api.py
+      - name: Run Blender Launcher Caching
+        run: |
+          .venv\Scripts\activate
+          echo "Building style"
+          python build_style.py
+          echo "Set Settings"
+          python scripts/set_default_settings.py
+          echo "Building Cache"
+          python source/main.py --build-cache &
+          sleep 240
+          echo "Updating Cache API files"
+          python scripts/update_cache_api.py
       - name: Commit Changes
         run: |
           git checkout main
