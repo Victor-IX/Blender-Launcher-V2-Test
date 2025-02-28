@@ -29,7 +29,7 @@ def install_template(dist: Path):
 class TemplateTask(Task):
     destination: Path
 
-    finished: ClassVar[Signal] = Signal()
+    finished = Signal()
 
     def run(self):
         install_template(self.destination)
