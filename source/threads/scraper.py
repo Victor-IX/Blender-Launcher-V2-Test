@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import base64
 import contextlib
-import sys
 import json
 import logging
 import re
+import sys
 from datetime import datetime, timezone
 from itertools import chain
 from pathlib import Path, PurePosixPath
@@ -87,7 +87,7 @@ def get_tag(
         try:
             parsed_data = json.loads(r.data)
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse pre-release tag JSON data: {e}")
+            logger.exception(f"Failed to parse pre-release tag JSON data: {e}")
             return None
 
         platform = get_platform()
@@ -145,7 +145,7 @@ def get_api_data(connection_manager: ConnectionManager, file: str) -> str | None
     try:
         data = json.loads(r.data)
     except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse {file} API JSON data: {e}")
+        logger.exception(f"Failed to parse {file} API JSON data: {e}")
         return None
 
     file_content = data.get("content")
@@ -158,7 +158,7 @@ def get_api_data(connection_manager: ConnectionManager, file: str) -> str | None
             logger.info(f"API data form {file} have been loaded successfully")
             return json_data
         except (base64.binascii.Error, json.JSONDecodeError) as e:
-            logger.error(f"Failed to decode or parse JSON data: {e}")
+            logger.exception(f"Failed to decode or parse JSON data: {e}")
             return None
     else:
         logger.error(f"Failed to load API data from {file} or unsupported encoding.")
@@ -183,7 +183,7 @@ def get_latest_patch_note(connection_manager: ConnectionManager, latest_tag) -> 
         logger.info(f"Latest patch note found")
         return patch_note
     except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse release notes JSON data: {e}")
+        logger.exception(f"Failed to parse release notes JSON data: {e}")
         return None
 
 
@@ -395,7 +395,7 @@ class Scraper(QThread):
             self.regex_filter()
 
         for tag in soup.find_all(limit=_limit, href=self.b3d_link):
-            build_info = self.new_blender_build(tag, url, branch_type)
+            build_info = self.new_blender_build(tag, url, branch_type, content)
 
             if build_info is not None:
                 yield build_info
@@ -403,17 +403,22 @@ class Scraper(QThread):
         r.release_conn()
         r.close()
 
-    def new_blender_build(self, tag, url, branch_type):
+    def new_blender_build(self, tag, url, branch_type, content):
         link = urljoin(url, tag["href"]).rstrip("/")
-        r = self.manager.request("HEAD", link)
 
-        if r is None:
-            return None
+        # Get commit time from content instead of creating a new request for each build
+        pattern = re.compile(r'href="[^"]*' + re.escape(tag["href"]) + r'"')
 
-        if r.status != 200:
-            return None
+        for line in content.decode("utf-8").splitlines():
+            if pattern.search(line):
+                time_pattern = r"(\d{1,2}-\w{3}-\d{4})\s+(\d{2}:\d{2})"
+                match = re.search(time_pattern, line)
+                if match:
+                    date = match.group(1)
+                    time = match.group(2)
+                    datetime_str = f"{date} {time} GMT"
+                    commit_time = dateparser.parse(datetime_str).astimezone()
 
-        info = r.headers
         build_hash: str | None = None
         stem = Path(link).stem
         match = re.findall(self.hash, stem)
@@ -452,9 +457,6 @@ class Scraper(QThread):
             if self.architecture == "x64" and "x64" not in link:
                 return None
 
-        commit_time = dateparser.parse(info["last-modified"]).astimezone()
-        r.release_conn()
-        r.close()
         return BuildInfo(link, str(subversion), build_hash, commit_time, branch)
 
     def scrap_stable_releases(self, platform=None):
@@ -463,7 +465,7 @@ class Scraper(QThread):
             self.platform = platform
             self.cache_path = stable_cache_path().with_name(f"stable_builds_{platform}.json")
             self.cache = ScraperCache.from_file_or_default(self.cache_path)
-            print(f"Scraping stable releases for {platform}")
+            logging.debug(f"Scraping stable releases for {platform}")
 
         url = "https://download.blender.org/release/"
         r = self.manager.request("GET", url)
@@ -563,11 +565,11 @@ class Scraper(QThread):
                     new_file_ver = f"{major}.{minor}"
                     logger.debug(f"Updating cache file version to {new_file_ver}")
             except json.JSONDecodeError:
-                logger.error("Failed to read api_file_version file. Using default 0.1")
+                logger.exception("Failed to read api_file_version file. Using default 0.1")
             except ValueError:
-                logger.error("Invalid api_file_version version format. Using default 0.1")
+                logger.exception("Invalid api_file_version version format. Using default 0.1")
             except Exception as e:
-                logger.error(f"Failed to read api_file_version version, using default 0.1: {e}")
+                logger.exception(f"Failed to read api_file_version version, using default 0.1: {e}")
 
             cache_path = self.cache_path
             cache_data = self.cache.to_dict()

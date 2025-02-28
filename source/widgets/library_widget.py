@@ -253,6 +253,9 @@ class LibraryWidget(BaseBuildWidget):
         self.makePortableAction = QAction("Unmake Portable" if config_path.is_dir() else "Make Portable")
         self.makePortableAction.triggered.connect(self.make_portable)
 
+        self.makePortableAction = QAction("Copy Build Hash")
+        self.makePortableAction.triggered.connect(self.copy_build_hash)
+
         self.debugMenu = BaseMenuWidget("Debug", parent=self)
         self.debugMenu.setFont(self.parent.font_10)
 
@@ -396,7 +399,9 @@ class LibraryWidget(BaseBuildWidget):
             and mime_data.hasUrls()
             and mime_data.hasFormat("text/uri-list")
             and all(
-                url.isLocalFile() and Path(url.fileName()).suffix in (".blend", ".blend1") for url in mime_data.urls()
+                url.isLocalFile()
+                and Path(url.fileName()).suffix in (".blend", ".blend1", ".blend2", ".blend3", ".blend4")
+                for url in mime_data.urls()
             )
         ):
             self.setStyleSheet("background-color: #4EA13A")
@@ -545,6 +550,10 @@ class LibraryWidget(BaseBuildWidget):
             config_path = Path(self.link) / version / folder_name
 
         return config_path
+
+    @Slot()
+    def copy_build_hash(self):
+        QApplication.clipboard().setText(self.build_info.build_hash)
 
     @Slot()
     def rename_branch(self):

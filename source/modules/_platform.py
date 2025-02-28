@@ -87,10 +87,22 @@ def get_environment():
         # Remove the env var as a last resort
         env.pop(lp_key, None)
 
+    # Removing PyInstaller variables from the environment
+    env.pop("_MEIPASS", None)
+
+    for key in list(env.keys()):
+        if key.startswith("_PYI"):
+            env.pop(key)
+
+    if "PATH" in env:
+        paths = env["PATH"].split(os.pathsep)
+        paths = [p for p in paths if "_MEI" not in p and "pyi" not in p.lower()]
+        env["PATH"] = os.pathsep.join(paths)
     return env
 
 
 def _popen(args):
+    env = get_environment()
     if get_platform() == "Windows":
         DETACHED_PROCESS = 0x00000008
         return Popen(
@@ -102,6 +114,7 @@ def _popen(args):
             close_fds=True,
             creationflags=DETACHED_PROCESS,
             start_new_session=True,
+            env=env,
         )
 
     return Popen(
@@ -111,7 +124,7 @@ def _popen(args):
         stderr=None,
         close_fds=True,
         preexec_fn=os.setpgrp,  # type: ignore
-        env=get_environment(),
+        env=env,
     )
 
 

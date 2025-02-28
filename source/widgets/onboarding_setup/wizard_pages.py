@@ -104,11 +104,19 @@ class ChooseLibraryPage(BasicOnboardingPage):
             default_choose_dir_folder=get_actual_library_folder(),
             parent=self,
         )
+
+        # TODO: Remove this when we have a better solution
+        # Check if the exe is in the home directory
+        # Temp fix to prevent user accidentally moving the exe if BL is downloaded through a package manager
+        home = Path().home()
+        executable_path = Path(sys.executable)
+
         self.move_exe = QCheckBox("Move exe to library", parent=self)
         self.move_exe.setToolTip(
             "Moves the program's exe to the specified location. Once first-time-setup is complete, you'll have to refer to this location in subsequent runs."
         )
-        self.move_exe.setChecked(True)
+
+        self.move_exe.setChecked(home in executable_path.parents)
         self.move_exe.setVisible(is_frozen())  # hide when exe is not frozen
 
         self.warning_label = QLabel(self)
@@ -123,6 +131,13 @@ class ChooseLibraryPage(BasicOnboardingPage):
         self.layout_.addWidget(self.warning_label)
         self.layout_.addWidget(QLabel("Library location:", self))
         self.layout_.addWidget(self.lf)
+        if home not in executable_path.parents:
+            self.path_warning_label = QLabel(self)
+            self.path_warning_label.setText(
+                f"The program's exe is outside of {str(home)}, it may lack the permisisons needed to move the executable to the library!"
+            )
+            self.path_warning_label.setWordWrap(True)
+            self.layout_.addWidget(self.path_warning_label)
         self.layout_.addWidget(self.move_exe)
 
         self.lf.validity_changed.connect(self.completeChanged)
@@ -189,7 +204,6 @@ Our default location is typically searched by DEs for application entries.
 REGISTRY_KEY_EXPLAIN = r"""The Following keys will be changed:
 CREATE Software\Classes\blenderlauncherv2.blend\shell\open\command -- To expose the launcher as a software class
 UPDATE Software\Classes\.blend\OpenWithProgids -- To add the launcher to the .blend "Open With..." list
-UPDATE Software\Classes\.blend1\OpenWithProgids -- To add the launcher to the .blend1 "Open With..." list
 CREATE Software\Classes\blenderlauncherv2.blend\DefaultIcon -- To set the icon when Blender Launcher is the default application
 These will be deleted/downgraded when you unregister the launcher"""
 
@@ -256,29 +270,23 @@ class ShortcutsPage(BasicOnboardingPage):
                 register_windows_filetypes(exe=str(self.prop_settings.exe_location))
 
         elif self.platform == "Windows":
+            from win32comext.shell import shell, shellcon
+
             if self.addtostart.isChecked():
                 generate_program_shortcut(
                     get_default_shortcut_destination(),
                     exe=str(self.prop_settings.exe_location),
                 )
             if self.addtodesk.isChecked():
-                # TODO: Consider using platformdirs to find the exact path
-                typical_paths = [
-                    Path("~/Desktop/Blender Launcher V2").expanduser(),
-                    Path("~/OneDrive/Desktop/Blender Launcher V2").expanduser(),
-                ]
-                exceptions = []
-                for pth in typical_paths:
-                    try:
-                        generate_program_shortcut(
-                            pth,
-                            exe=str(self.prop_settings.exe_location),
-                        )
-                        break
-                    except Exception as e:
-                        exceptions.append(e)
-                if len(exceptions) == len(typical_paths):  # all paths failed to generate
-                    raise Exception("Exceptions raised while generating desktop shortcuts: {exceptions}")
+                desktop = shell.SHGetFolderPath(0, shellcon.CSIDL_DESKTOP, None, 0)
+
+                try:
+                    generate_program_shortcut(
+                        desktop,
+                        exe=str(self.prop_settings.exe_location),
+                    )
+                except Exception as e:
+                    raise Exception(f"Exceptions raised while generating desktop shortcuts: {e}")
 
 
 TITLEBAR_LABEL_TEXT = """This disables the custom title bar and uses the OS's default titlebar."""

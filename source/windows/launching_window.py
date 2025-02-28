@@ -168,7 +168,7 @@ class LaunchingWindow(BaseWindow):
 
         self.__enabled_font = QFont(self.font_10)
         self.__enabled_font.setBold(True)
-        self.__enabled_font.setWeight(500)
+        self.__enabled_font.setWeight(QFont.Weight.Bold)
         self.__disabled_font = QFont(self.font_8)
         self.__disabled_font.setItalic(True)
         self.__disabled_font.setWeight(QFont.Weight.Light)
@@ -413,6 +413,7 @@ class LaunchingWindow(BaseWindow):
         enabled_builds: list[BuildInfo] = []
 
         for build in self.builds.values():
+            logger.info(f"BUILD: {build}")
             item = self.list_items[BBI.from_buildinfo(build)]
 
             item.enabled = build.full_semversion in versions

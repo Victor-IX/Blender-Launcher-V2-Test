@@ -93,7 +93,7 @@ try:
 
     HOTKEYS_AVAILABLE = True
 except Exception as e:
-    logging.error(f"Error importing pynput: {e}\nGlobal hotkeys not supported.")
+    logging.exception(f"Error importing pynput: {e}\nGlobal hotkeys not supported.")
     HOTKEYS_AVAILABLE = False
 
 
@@ -1085,7 +1085,7 @@ class BlenderLauncher(BaseWindow):
             if path_note is not None:
                 path_note_text = patch_note_cleaner(path_note)
             popup = PopupWindow(
-                title="New version available",
+                title=f"New version {latest_tag.replace('v', '')} available",
                 message=path_note_text,
                 buttons=["Update", "Later"],
                 icon=PopupIcon.NONE,
