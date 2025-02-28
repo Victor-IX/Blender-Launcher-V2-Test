@@ -65,8 +65,8 @@ class ExtractTask(Task):
     file: Path
     destination: Path
 
-    progress = ClassVar[Signal](int, int)
-    finished = ClassVar[Signal](Path)
+    progress: ClassVar[Signal] = Signal(int, int)
+    finished: ClassVar[Signal] = Signal(Path)
 
     def run(self):
         result = extract(self.file, self.destination, self.progress.emit)

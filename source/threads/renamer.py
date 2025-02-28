@@ -11,8 +11,8 @@ class RenameTask(Task):
     src: Path
     dst_name: str
 
-    finished = ClassVar[Signal](Path)
-    failure = ClassVar[Signal]()
+    finished: ClassVar[Signal] = Signal(Path)
+    failure: ClassVar[Signal] = Signal()
 
     def run(self):
         try:

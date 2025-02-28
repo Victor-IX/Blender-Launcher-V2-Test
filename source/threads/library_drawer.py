@@ -50,9 +50,9 @@ def get_blender_builds(folders: Iterable[str | Path]) -> Iterable[tuple[Path, bo
 @dataclass(frozen=True)
 class DrawLibraryTask(Task):
     folders: Iterable[str | Path] = ("stable", "daily", "experimental", "bforartists", "custom")
-    found = ClassVar[Signal](Path)
-    unrecognized = ClassVar[Signal](Path)
-    finished = ClassVar[Signal]()
+    found: ClassVar[Signal] = Signal(Path)
+    unrecognized: ClassVar[Signal] = Signal(Path)
+    finished: ClassVar[Signal] = Signal()
 
     def run(self):
         for build, recognized in get_blender_builds(folders=self.folders):

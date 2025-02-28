@@ -18,8 +18,8 @@ logger = logging.getLogger()
 class DownloadTask(Task):
     manager: REQUEST_MANAGER
     link: str
-    progress = ClassVar[Signal](int, int)
-    finished = ClassVar[Signal](Path)
+    progress: ClassVar[Signal] = Signal(int, int)
+    finished: ClassVar[Signal] = Signal(Path)
 
     def run(self):
         self.progress.emit(0, 0)

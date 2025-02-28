@@ -360,8 +360,8 @@ def read_blender_version(
 
 @dataclass(frozen=True)
 class WriteBuildTask(Task):
-    written = ClassVar[Signal]()
-    error = ClassVar[Signal]()
+    written: ClassVar[Signal] = Signal()
+    error: ClassVar[Signal] = Signal()
 
     path: Path
     build_info: BuildInfo
@@ -419,8 +419,8 @@ class ReadBuildTask(Task):
     archive_name: str | None = None
     auto_write: bool = True
 
-    finished = ClassVar[Signal](BuildInfo)
-    failure = ClassVar[Signal](Exception)
+    finished: ClassVar[Signal] = Signal(BuildInfo)
+    failure: ClassVar[Signal] = Signal(Exception)
 
     def run(self):
         try:
