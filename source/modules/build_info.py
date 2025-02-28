@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from functools import cache
 from pathlib import Path
+from typing import ClassVar
 
 import dateparser
 from modules._platform import _check_output, _popen, get_platform
@@ -359,8 +360,8 @@ def read_blender_version(
 
 @dataclass(frozen=True)
 class WriteBuildTask(Task):
-    written = Signal()
-    error = Signal()
+    written = ClassVar[Signal]()
+    error = ClassVar[Signal]()
 
     path: Path
     build_info: BuildInfo
@@ -418,8 +419,8 @@ class ReadBuildTask(Task):
     archive_name: str | None = None
     auto_write: bool = True
 
-    finished = Signal(BuildInfo)
-    failure = Signal(Exception)
+    finished = ClassVar[Signal](BuildInfo)
+    failure = ClassVar[Signal](Exception)
 
     def run(self):
         try:

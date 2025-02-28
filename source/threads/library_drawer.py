@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from modules._platform import get_platform
 from modules.settings import get_library_folder
@@ -50,9 +50,9 @@ def get_blender_builds(folders: Iterable[str | Path]) -> Iterable[tuple[Path, bo
 @dataclass(frozen=True)
 class DrawLibraryTask(Task):
     folders: Iterable[str | Path] = ("stable", "daily", "experimental", "bforartists", "custom")
-    found = Signal(Path)
-    unrecognized = Signal(Path)
-    finished = Signal()
+    found = ClassVar[Signal](Path)
+    unrecognized = ClassVar[Signal](Path)
+    finished = ClassVar[Signal]()
 
     def run(self):
         for build, recognized in get_blender_builds(folders=self.folders):

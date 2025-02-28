@@ -1,6 +1,7 @@
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 from modules._copyfileobj import copyfileobj
 from modules.connection_manager import REQUEST_MANAGER
@@ -17,8 +18,8 @@ logger = logging.getLogger()
 class DownloadTask(Task):
     manager: REQUEST_MANAGER
     link: str
-    progress = Signal(int, int)
-    finished = Signal(Path)
+    progress = ClassVar[Signal](int, int)
+    finished = ClassVar[Signal](Path)
 
     def run(self):
         self.progress.emit(0, 0)

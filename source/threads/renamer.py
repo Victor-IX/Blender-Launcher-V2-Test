@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 from modules.task import Task
 from PySide6.QtCore import Signal
@@ -10,8 +11,8 @@ class RenameTask(Task):
     src: Path
     dst_name: str
 
-    finished = Signal(Path)
-    failure = Signal()
+    finished = ClassVar[Signal](Path)
+    failure = ClassVar[Signal]()
 
     def run(self):
         try:

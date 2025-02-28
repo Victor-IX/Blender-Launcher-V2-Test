@@ -3,6 +3,7 @@ import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 from modules._platform import _check_call
 from modules.task import Task
@@ -64,8 +65,8 @@ class ExtractTask(Task):
     file: Path
     destination: Path
 
-    progress = Signal(int, int)
-    finished = Signal(Path)
+    progress = ClassVar[Signal](int, int)
+    finished = ClassVar[Signal](Path)
 
     def run(self):
         result = extract(self.file, self.destination, self.progress.emit)
