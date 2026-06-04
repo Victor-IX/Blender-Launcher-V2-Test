@@ -1,6 +1,6 @@
 [project]
 name = "Blender-Launcher-V2"
-version = "2.6.0"
+version = "4.5.2"
 description = ""
 authors = []
 dependencies = [

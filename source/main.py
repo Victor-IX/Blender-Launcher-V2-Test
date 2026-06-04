@@ -31,9 +31,9 @@ from utils.dpi import apply_scale_factor
 from utils.logger import setup_logging
 
 version = Version(
+    4,
+    5,
     2,
-    6,
-    0,
     # prerelease="rc.1",
 )
 
