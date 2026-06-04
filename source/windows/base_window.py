@@ -3,29 +3,30 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from modules.connection_manager import ConnectionManager
+from modules.fonts import Fonts
 from modules.icons import Icons
-from modules.settings import get_enable_high_dpi_scaling, get_use_system_titlebar
-from PySide6.QtCore import QFile, QPoint, Qt, QTextStream
-from PySide6.QtGui import QFont, QFontDatabase
+from modules.settings import get_use_system_titlebar
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMainWindow
 
 if TYPE_CHECKING:
     from semver import Version
-
-if get_enable_high_dpi_scaling():
-    QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
-    QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, True)
+    from windows.main_window import BlenderLauncher
 
 
 class BaseWindow(QMainWindow):
-    def __init__(self, parent=None, app: QApplication | None = None, version: Version | None = None):
+    def __init__(
+        self, parent: BlenderLauncher | None = None, app: QApplication | None = None, version: Version | None = None
+    ):
         super().__init__()
-        self.parent = parent
+        if parent is not None:
+            self.launcher: BlenderLauncher = parent
 
-        # Setup icons
+        # Setup icons & fonts
         self.icons = Icons.get()
+        self.fonts = Fonts.get()
 
-        if parent is None and app is not None:
+        if parent is None and app is not None and version is not None:
             self.app = app
             self.version = version
 
@@ -33,20 +34,6 @@ class BaseWindow(QMainWindow):
             self.cm = ConnectionManager(version=version)
             self.cm.setup()
             self.manager = self.cm.manager
-
-            # Setup font
-            QFontDatabase.addApplicationFont(":resources/fonts/OpenSans-SemiBold.ttf")
-            self.font_10 = QFont("Open Sans SemiBold", 10)
-            self.font_10.setHintingPreference(QFont.PreferNoHinting)
-            self.font_8 = QFont("Open Sans SemiBold", 8)
-            self.font_8.setHintingPreference(QFont.PreferNoHinting)
-            self.app.setFont(self.font_10)
-
-            # Setup style
-            file = QFile(":resources/styles/global.qss")
-            file.open(QFile.ReadOnly | QFile.Text)
-            self.style_sheet = QTextStream(file).readAll()
-            self.app.setStyleSheet(self.style_sheet)
 
         self.using_system_bar = get_use_system_titlebar()
         self.set_system_titlebar(self.using_system_bar)
@@ -104,25 +91,34 @@ class BaseWindow(QMainWindow):
         self.setCursor(Qt.CursorShape.ArrowCursor)
 
     def showEvent(self, event):
-        parent = self.parent
+        if hasattr(self, "launcher") and self.launcher is not None:
+            launcher = self.launcher
+            if self not in launcher.windows:
+                launcher.windows.append(self)
+                launcher.show_signal.connect(self.show)
+                launcher.close_signal.connect(self.hide)
 
-        if parent is not None:
-            if self not in parent.windows:
-                parent.windows.append(self)
-                parent.show_signal.connect(self.show)
-                parent.close_signal.connect(self.hide)
-
-            if self.parent.isVisible():
-                x = parent.x() + (parent.width() - self.width()) * 0.5
-                y = parent.y() + (parent.height() - self.height()) * 0.5
+            if launcher.isVisible():
+                x = launcher.x() + (launcher.width() - self.width()) * 0.5
+                y = launcher.y() + (launcher.height() - self.height()) * 0.5
+                screen = launcher.screen() or launcher.app.primaryScreen()
             else:
-                size = parent.app.screens()[0].size()
-                x = (size.width() - self.width()) * 0.5
-                y = (size.height() - self.height()) * 0.5
+                screen = launcher.app.primaryScreen()
+                geo = screen.availableGeometry()
+                x = geo.left() + (geo.width() - self.width()) * 0.5
+                y = geo.top() + (geo.height() - self.height()) * 0.5
 
-            self.move(int(x), int(y))
+            # Clamp to the screen's available area so the header stays reachable when the
+            # window is taller than the screen (e.g. macOS with a high DPI scale factor).
+            avail = screen.availableGeometry()
+            max_x = avail.left() + max(0, avail.width() - self.width())
+            max_y = avail.top() + max(0, avail.height() - self.height())
+            x = max(avail.left(), min(int(x), max_x))
+            y = max(avail.top(), min(int(y), max_y))
+
+            self.move(x, y)
             event.accept()
 
     def _destroyed(self):
-        if self.parent is not None and self in self.parent.windows:
-            self.parent.windows.remove(self)
+        if hasattr(self, "launcher") and self.launcher is not None and self in self.launcher.windows:
+            self.launcher.windows.remove(self)

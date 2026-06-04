@@ -2,7 +2,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from re import match
 from shutil import copytree
-from typing import ClassVar
 
 from modules.settings import get_library_folder
 from modules.task import Task
@@ -25,7 +24,7 @@ def install_template(dist: Path):
             return
 
 
-@dataclass(frozen=True)
+@dataclass
 class TemplateTask(Task):
     destination: Path
 

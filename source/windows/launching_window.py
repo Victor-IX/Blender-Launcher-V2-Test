@@ -4,8 +4,8 @@ import contextlib
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
 
+from i18n import t
 from items.enablable_list_widget_item import EnablableListWidgetItem
 from modules.blendfile_reader import BlendfileHeader, read_blendfile_header
 from modules.build_info import BuildInfo, LaunchOpenLast, LaunchWithBlendFile, launch_build
@@ -16,25 +16,14 @@ from modules.settings import (
     set_version_specific_queries,
 )
 from modules.tasks import TaskQueue
-from modules.version_matcher import VALID_QUERIES, BInfoMatcher, VersionSearchQuery
+from modules.version_matcher import VALID_QUERIES, VersionSearchQuery
 from modules.version_matcher import BasicBuildInfo as BBI
 from PySide6.QtCore import Qt, QTimer, Slot
 from PySide6.QtGui import QFont, QFontMetrics, QKeyEvent
-from PySide6.QtWidgets import (
-    QApplication,
-    QComboBox,
-    QGridLayout,
-    QLabel,
-    QListWidget,
-    QPushButton,
-    QWidget,
-)
+from PySide6.QtWidgets import QApplication, QComboBox, QGridLayout, QLabel, QListWidget, QPushButton, QWidget
 from threads.library_drawer import DrawLibraryTask
 from widgets.lintable_line_edit import LintableLineEdit
 from windows.base_window import BaseWindow
-
-if TYPE_CHECKING:
-    from datetime import datetime
 
 logger = logging.getLogger()
 
@@ -82,11 +71,11 @@ class LaunchingWindow(BaseWindow):
         self.timer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.cancelled = False
 
-        self.launch_button = QPushButton("Launch", parent=self)
+        self.launch_button = QPushButton(t("act.launch"), parent=self)
         self.launch_button.setProperty("LaunchButton", True)
         self.launch_button.clicked.connect(self.launch_from_button)
 
-        self.cancel_button = QPushButton("Cancel", parent=self)
+        self.cancel_button = QPushButton(t("act.cancel"), parent=self)
         self.cancel_button.setProperty("CancelButton", True)
         self.cancel_button.clicked.connect(self.close_)
 
@@ -96,38 +85,29 @@ class LaunchingWindow(BaseWindow):
         self.central_layout.setContentsMargins(10, 10, 10, 10)
         self.setCentralWidget(widget)
 
-        self.status_label = QLabel("Reading builds...", parent=self)
+        self.status_label = QLabel(t("launching.status.reading"), parent=self)
 
         file_icon = self.icons.bl_file
         pixmap = file_icon.pixmap(16, 16)
 
         self.help_label = QLabel(parent=self)
         self.help_label.setPixmap(pixmap)
-        self.help_label.setToolTip(
-            "<br>".join(
-                [
-                    "The version query",
-                    "can be modified to use ^ and - to search for specific builds depending on age.",
-                    "Examples of valid version queries:",
-                    *VALID_QUERIES.splitlines(),
-                ]
-            )
-        )
+        self.help_label.setToolTip("<br>".join([t("launching.help"), *VALID_QUERIES.splitlines()]))
         ## Version settings
         self.version_query_edit = LintableLineEdit(self)
         self.version_query_edit.editingFinished.connect(self.update_query_from_edits)
         self.version_query_edit.textChanged.connect(self.cancel_timer)
-        self.version_query_edit.setPlaceholderText("Any (*.*.*)")
+        self.version_query_edit.setPlaceholderText(t("launching.any_v_placeholder"))
         self.branch_edit = LintableLineEdit(self)
         self.branch_edit.editingFinished.connect(self.update_query_from_edits)
         self.branch_edit.textChanged.connect(self.cancel_timer)
-        self.branch_edit.setPlaceholderText("Any (*)")
+        self.branch_edit.setPlaceholderText(t("launching.chrono.any"))
         self.build_hash_edit = LintableLineEdit(self)
         self.build_hash_edit.editingFinished.connect(self.update_query_from_edits)
         self.build_hash_edit.textChanged.connect(self.cancel_timer)
         self.build_hash_edit.setPlaceholderText("Any (*)")
         self.date_range_combo = QComboBox(self)
-        self.date_range_combo.addItems(["Latest (^)", "Any (*)", "Oldest (-)"])
+        self.date_range_combo.addItems([t(f"launching.chrono.{x}") for x in ["latest", "any", "oldest"]])
         self.date_range_combo.setCurrentIndex(0)
         self.date_range_combo.currentIndexChanged.connect(self.update_query_from_edits)
         self.date_range_combo.currentIndexChanged.connect(self.cancel_timer)
@@ -150,13 +130,13 @@ class LaunchingWindow(BaseWindow):
 
         self.central_layout.addWidget(self.status_label, 0, 1, 1, 2)
         self.central_layout.addWidget(self.help_label, 0, 0, 1, 1)
-        self.central_layout.addWidget(QLabel("Version selection: ", parent=self), 1, 0, 1, 1)
+        self.central_layout.addWidget(QLabel(t("launching.version"), parent=self), 1, 0, 1, 1)
         self.central_layout.addWidget(self.version_query_edit, 1, 1, 1, 2)
-        self.central_layout.addWidget(QLabel("Branch: ", parent=self), 2, 0, 1, 1)
+        self.central_layout.addWidget(QLabel(t("launching.branch"), parent=self), 2, 0, 1, 1)
         self.central_layout.addWidget(self.branch_edit, 2, 1, 1, 2)
-        self.central_layout.addWidget(QLabel("Build hash: ", parent=self), 3, 0, 1, 1)
+        self.central_layout.addWidget(QLabel(t("launching.bhash"), parent=self), 3, 0, 1, 1)
         self.central_layout.addWidget(self.build_hash_edit, 3, 1, 1, 2)
-        self.central_layout.addWidget(QLabel("Date selection: ", parent=self), 4, 0, 1, 1)
+        self.central_layout.addWidget(QLabel(t("launching.date"), parent=self), 4, 0, 1, 1)
         self.central_layout.addWidget(self.date_range_combo, 4, 1, 1, 2)
         self.central_layout.addWidget(self.error_preview, 5, 0, 1, 3)
         self.central_layout.addWidget(self.builds_list, 6, 0, 1, 3)
@@ -166,10 +146,10 @@ class LaunchingWindow(BaseWindow):
         self.central_layout.addWidget(self.cancel_button, 9, 0, 1, 1)
         self.central_layout.addWidget(self.launch_button, 9, 1, 1, 2)
 
-        self.__enabled_font = QFont(self.font_10)
+        self.__enabled_font = QFont(self.fonts.font_10)
         self.__enabled_font.setBold(True)
         self.__enabled_font.setWeight(QFont.Weight.Bold)
-        self.__disabled_font = QFont(self.font_8)
+        self.__disabled_font = QFont(self.fonts.font_8)
         self.__disabled_font.setItalic(True)
         self.__disabled_font.setWeight(QFont.Weight.Light)
 
@@ -183,6 +163,8 @@ class LaunchingWindow(BaseWindow):
         branch = self.branch_edit.text()
         if branch == "":
             branch = None
+        else:
+            branch = tuple(branch.split(","))
 
         build_hash = self.build_hash_edit.text()
         if build_hash == "":
@@ -219,7 +201,7 @@ class LaunchingWindow(BaseWindow):
         logger.debug("Updating query boxes...")
 
         self.version_query_edit.setText(f"{query.major}.{query.minor}.{query.patch}")
-        self.branch_edit.setText(query.branch or "")
+        self.branch_edit.setText(",".join(query.branch) if query.branch is not None else "")
         self.build_hash_edit.setText(query.build_hash or "")
         if query.commit_time == "^":
             self.date_range_combo.setCurrentIndex(0)
@@ -239,7 +221,7 @@ class LaunchingWindow(BaseWindow):
                 major=version.major,
                 minor=version.minor,
                 patch=version.patch,
-                branch=build.branch,
+                branch=(build.branch,),
                 build_hash=build.build_hash,
                 commit_time=build.commit_time,
             )
@@ -343,7 +325,7 @@ class LaunchingWindow(BaseWindow):
 
     @Slot()
     def search_finished(self):
-        self.status_label.setText(f"Found {len(self.builds)} builds")
+        self.status_label.setText(t("launching.status.found", count=len(self.builds)))
 
         self.repad_list()
 
@@ -353,8 +335,6 @@ class LaunchingWindow(BaseWindow):
                 if build.link == path:
                     self.list_items[BBI.from_buildinfo(build)].setSelected(True)
                     self.set_query_from_selected_build()
-
-        self.matcher = self.make_matcher()
 
         all_queries = get_version_specific_queries()
 
@@ -367,10 +347,10 @@ class LaunchingWindow(BaseWindow):
             if header is None:
                 raise
             self.saved_header = header
-            self.status_label.setText(f"Detected header version: {header.version}")
+            self.status_label.setText(t("launching.status.header", version=header.version))
             if self.save_current_query_button is not None:
                 self.save_current_query_button.setText(
-                    f"Save current search for .blend files made in {header.version.major}.{header.version.minor}"
+                    t("launching.save_current", short_v=f"{header.version.major}.{header.version.minor}")
                 )
                 self.save_current_query_button.show()
 
@@ -380,7 +360,7 @@ class LaunchingWindow(BaseWindow):
                 self.version_query = all_queries[v]
                 self.update_query_boxes(self.version_query)
             else:
-                vsq = VersionSearchQuery(v.major, v.minor, "^")
+                vsq = VersionSearchQuery.version(v.major, v.minor, "^")
                 if self.version_query is None:
                     self.update_query_boxes(vsq)
 
@@ -399,21 +379,20 @@ class LaunchingWindow(BaseWindow):
             else:
                 self.prepare_launch(build)
 
-    def make_matcher(self):
-        return BInfoMatcher(tuple(map(BBI.from_buildinfo, self.builds.values())))
+    def make_basic_info(self) -> list[BBI]:
+        return list(map(BBI.from_buildinfo, self.builds.values()))
 
-    def update_search(self) -> tuple[tuple[BBI, ...], list[BuildInfo]]:
+    def update_search(self) -> tuple[list[BBI], list[BuildInfo]]:
         """Updates the visibility of each item in the list depending on the search query. returns matches"""
         assert self.version_query is not None
         logger.debug(f"QUERY: {self.version_query!r}")
-        matcher = self.make_matcher()
-        matches = matcher.match(self.version_query)
+        builds = self.make_basic_info()
+        matches = self.version_query.match(builds)
         versions = {b.version for b in matches}
 
         enabled_builds: list[BuildInfo] = []
 
         for build in self.builds.values():
-            logger.info(f"BUILD: {build}")
             item = self.list_items[BBI.from_buildinfo(build)]
 
             item.enabled = build.full_semversion in versions
@@ -469,7 +448,7 @@ class LaunchingWindow(BaseWindow):
         """Called by the launch timer waiting to start the build."""
         self.remaining_time = self.remaining_time - 1
         if self.remaining_time > 0:
-            self.timer_label.setText(f"Launching in {self.remaining_time}s")
+            self.timer_label.setText(t("launching.timer", time=self.remaining_time))
             self.launch_timer.start()
         else:
             self.actually_launch(self.target_build)

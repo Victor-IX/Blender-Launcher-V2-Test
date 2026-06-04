@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import logging
 import re
+import shutil
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
+from i18n import t
 from modules.build_info import BuildInfo, ReadBuildTask, parse_blender_ver
 from modules.enums import MessageType
+from modules.fonts import Fonts
 from modules.settings import get_install_template, get_library_folder
-from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 from semver import Version
 from threads.downloader import DownloadTask
@@ -20,11 +24,13 @@ from widgets.base_progress_bar_widget import BaseProgressBarWidget
 from widgets.build_state_widget import BuildStateWidget
 from widgets.datetime_widget import DateTimeWidget
 from widgets.elided_text_label import ElidedTextLabel
+from windows.popup_window import Popup
 
 if TYPE_CHECKING:
-    from widgets.base_page_widget import BasePageWidget
     from widgets.library_widget import LibraryWidget
     from windows.main_window import BlenderLauncher
+
+logger = logging.getLogger()
 
 
 class DownloadState(Enum):
@@ -39,35 +45,39 @@ class DownloadWidget(BaseBuildWidget):
     focus_installed_widget = Signal(BaseBuildWidget)
 
     def __init__(self, parent: BlenderLauncher, list_widget, item, build_info, installed, show_new=False):
-        super().__init__(parent=parent)
-        self.parent: BlenderLauncher = parent
+        super().__init__(
+            parent=parent,
+            item=item,
+            build_info=build_info,
+        )
+        self.launcher = parent
         self.list_widget = list_widget
-        self.item = item
-        self.build_info: BuildInfo = build_info
         self.show_new = show_new
         self.installed: LibraryWidget | None = None
         self.state = DownloadState.IDLE
         self.build_dir = None
         self.source_file = None
+        self.updating_widget = None
+        self._is_removed = False
 
         self.progressBar = BaseProgressBarWidget()
-        self.progressBar.setFont(self.parent.font_8)
+        self.progressBar.setFont(Fonts.get().font_8)
         self.progressBar.setFixedHeight(18)
         self.progressBar.hide()
 
-        self.downloadButton = QPushButton("Download")
-        self.downloadButton.setFixedWidth(85)
+        self.downloadButton = QPushButton(t("act.download"))
+        self.downloadButton.setFixedWidth(95)  # Match header fakeLabel width
         self.downloadButton.setProperty("LaunchButton", True)
-        self.downloadButton.clicked.connect(self.init_downloader)
+        self.downloadButton.clicked.connect(lambda: self.init_downloader())
         self.downloadButton.setCursor(Qt.CursorShape.PointingHandCursor)
 
-        self.installedButton = QPushButton("Installed")
-        self.installedButton.setFixedWidth(85)
+        self.installedButton = QPushButton(t("act.installed"))
+        self.installedButton.setFixedWidth(95)  # Match header fakeLabel width
         self.installedButton.setProperty("InstalledButton", True)
         self.installedButton.clicked.connect(self.focus_installed)
 
-        self.cancelButton = QPushButton("Cancel")
-        self.cancelButton.setFixedWidth(85)
+        self.cancelButton = QPushButton(t("act.cancel"))
+        self.cancelButton.setFixedWidth(95)  # Match header fakeLabel width
         self.cancelButton.setProperty("CancelButton", True)
         self.cancelButton.clicked.connect(self.download_cancelled)
         self.cancelButton.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -102,6 +112,14 @@ class DownloadWidget(BaseBuildWidget):
         self.build_info_hl.addWidget(self.branchLabel, stretch=1)
         self.build_info_hl.addWidget(self.commitTimeLabel)
 
+        # Connect to column width changes from the page widget
+        page_widget = self.list_widget.page
+        if page_widget is not None:
+            page_widget.column_widths_changed.connect(self._update_column_widths)
+            # Apply initial column widths
+            widths = page_widget.get_column_widths()
+            self._update_column_widths(widths[0], widths[1], widths[2])
+
         if self.show_new and not self.installed:
             self.build_state_widget.setNewBuild(True)
 
@@ -124,54 +142,60 @@ class DownloadWidget(BaseBuildWidget):
         if self.build_info.branch in {"stable", "lts", "daily", "bforartists"}:
             self.menu.addAction(self.showReleaseNotesAction)
         else:
-            regexp = re.compile(r"D\d{5}")
+            exp = re.compile(r"D\d{5}")
 
-            if regexp.search(self.build_info.branch):
-                self.showReleaseNotesAction.setText("Show Patch Details")
+            if exp.search(self.build_info.branch):
+                self.showReleaseNotesAction.setText(t("act.a.release_notes_patch"))
                 self.menu.addAction(self.showReleaseNotesAction)
+            else:
+                exp = re.compile(r"pr\d+", flags=re.IGNORECASE)
+                if exp.search(self.build_info.subversion):
+                    self.showReleaseNotesAction.setText(t("act.a.release_notes_pr"))
+                    self.menu.addAction(self.showReleaseNotesAction)
 
         self.list_widget.sortItems()
 
-    def context_menu(self):
+    def context_menu(self) -> None:
         if self.installed:
             self.installed.context_menu()
             return
 
         self.menu.trigger()
 
-    def mouseDoubleClickEvent(self, _event):
+    def mouseDoubleClickEvent(self, _event) -> None:
         if self.state != DownloadState.DOWNLOADING and not self.installed:
             self.init_downloader()
         elif self.installed:
             self.focus_installed()
 
     @Slot()
-    def focus_installed(self):
+    def focus_installed(self) -> None:
         self.focus_installed_widget.emit(self.installed)
 
-    def mouseReleaseEvent(self, _event):
+    def mouseReleaseEvent(self, _event) -> None:
         if self.show_new is True:
             self.build_state_widget.setNewBuild(False)
             self.show_new = False
 
-    def init_downloader(self):
+    def init_downloader(self, updating_widget: LibraryWidget | None = None) -> None:
         self.item.setSelected(True)
+        self.updating_widget = updating_widget
 
         if self.show_new is True:
             self.build_state_widget.setNewBuild(False)
             self.show_new = False
 
-        assert self.parent.manager is not None
+        assert self.launcher.manager is not None
         self.set_state(DownloadState.DOWNLOADING)
         self.dl_task = DownloadTask(
-            manager=self.parent.manager,
+            manager=self.launcher.manager,
             link=self.build_info.link,
         )
         self.dl_task.progress.connect(self.progressBar.set_progress)
         self.dl_task.finished.connect(self.init_extractor)
-        self.parent.task_queue.append(self.dl_task)
+        self.launcher.task_queue.append(self.dl_task)
 
-    def set_state(self, state: DownloadState):
+    def set_state(self, state: DownloadState) -> None:
         self.state = state
         if state == DownloadState.IDLE:
             self.progressBar.hide()
@@ -179,7 +203,7 @@ class DownloadWidget(BaseBuildWidget):
             self.build_state_widget.setDownload(False)
             self.build_state_widget.setExtract(False)
         if state == DownloadState.DOWNLOADING:
-            self.progressBar.set_title("Downloading")
+            self.progressBar.set_state(self.progressBar.State.DOWNLOADING)
             self.progressBar.show()
             self.cancelButton.show()
             self.cancelButton.setEnabled(True)
@@ -187,14 +211,13 @@ class DownloadWidget(BaseBuildWidget):
             self.build_state_widget.setDownload()
         elif state == DownloadState.EXTRACTING:
             self.progressBar.show()
-            self.progressBar.set_title("Extracting")
+            self.progressBar.set_state(self.progressBar.State.EXTRACTING)
             self.cancelButton.setEnabled(False)
             self.build_state_widget.setExtract()
         elif state == DownloadState.READING:
             self.progressBar.show()
-        # elif state == DownloadState.RENAMING:
 
-    def init_extractor(self, source):
+    def init_extractor(self, source: Path) -> None:
         self.set_state(DownloadState.EXTRACTING)
 
         library_folder = Path(get_library_folder())
@@ -205,61 +228,93 @@ class DownloadWidget(BaseBuildWidget):
             dist = library_folder / "daily"
         elif self.build_info.branch == "bforartists":
             dist = library_folder / "bforartists"
+        elif self.build_info.branch == "upbge-stable":
+            dist = library_folder / "upbge-stable"
+        elif self.build_info.branch == "upbge-weekly":
+            dist = library_folder / "upbge-weekly"
         else:
             dist = library_folder / "experimental"
 
         self.source_file = source
-        a = ExtractTask(file=source, destination=dist)
-        a.progress.connect(self.progressBar.set_progress)
-        a.finished.connect(self.init_template_installer)
-        self.parent.task_queue.append(a)
+        t = ExtractTask(file=source, destination=dist, is_upbge=self.build_info.branch.startswith("upbge"))
+        t.progress.connect(self.progressBar.set_progress)
+        t.finished.connect(self.init_template_installer)
+        self.launcher.task_queue.append(t)
 
-    def init_template_installer(self, dist: Path):
+    def init_template_installer(self, dist: Path, is_removed: bool) -> None:
+        self._is_removed = is_removed
         self.build_state_widget.setExtract(False)
         self.build_dir = dist
 
+        if self.build_info.branch == "bforartists":
+            self.move_bforartists_patch_note()
+
         if get_install_template():
-            self.progressBar.set_title("Copying data...")
-            t = TemplateTask(destination=self.build_dir)
-            t.finished.connect(self.download_get_info)
-            self.parent.task_queue.append(t)
+            self.progressBar.set_state(self.progressBar.State.COPYING)
+            task = TemplateTask(destination=self.build_dir)
+            task.finished.connect(self.download_get_info)
+            self.launcher.task_queue.append(task)
         else:
             self.download_get_info()
 
-    def download_cancelled(self):
+    def move_bforartists_patch_note(self) -> None:
+        if self.build_dir is None:
+            logger.error("Build directory is None, cannot move Bforartists patch note.")
+            return
+
+        bforartist_lib = self.build_dir.parent
+        txt_files = [f for f in bforartist_lib.glob("*.txt") if f.is_file()]
+        folders = [folder for folder in bforartist_lib.iterdir() if folder.is_dir()]
+
+        for file in txt_files:
+            file_version = ".".join(file.stem[-3:])
+            for folder in folders:
+                if file_version in folder.name:
+                    try:
+                        shutil.move(file, folder / file.name)
+                        break
+                    except shutil.Error as e:
+                        logger.exception(f"Failed to move {file.name} to {folder.name}: {e}")
+
+    def download_cancelled(self) -> None:
         self.item.setSelected(True)
         self.set_state(DownloadState.IDLE)
         self.cancelButton.hide()
         self.downloadButton.show()
-        if not self.parent.kill_thread_with_task(self.dl_task):  # killing failed
-            if self.dl_task in self.parent.task_queue:
-                self.parent.task_queue.remove(self.dl_task)
-            else:
-                # Task does not exist / finished in the
-                # microsecond between this function starting and now
-                ...
-
+        self.launcher.task_queue.remove_task(self.dl_task)
         self.build_state_widget.setDownload(False)
 
-    def download_get_info(self):
+        # Reset the widget's button states if this was an update download
+        if self.updating_widget is not None:
+            self.updating_widget.launchButton.set_text(t("act.launch"))
+            self.updating_widget.launchButton.setEnabled(True)
+            if hasattr(self.updating_widget, "_update_download_widget"):
+                self.updating_widget.show_update_button()
+                self.updating_widget.updateButton.clicked.connect(self.updating_widget.trigger_update_download)
+            self.updating_widget = None
+
+    def download_get_info(self) -> None:
         self.set_state(DownloadState.READING)
-        if self.parent.platform == "Linux":
+        if self.launcher.platform == "Linux":
             archive_name = Path(self.build_info.link).with_suffix("").stem
         else:
             archive_name = Path(self.build_info.link).stem
 
         assert self.build_dir is not None
 
-        # If the returned version from the executable is invalid it might break loading.
-        ver_ = parse_blender_ver(self.build_dir.name, search=True)
-        ver = Version(
-            ver_.major,
-            ver_.minor,
-            ver_.patch,
-            prerelease=ver_.prerelease,
-        )
+        if self.build_info.branch == "upbge-weekly":
+            ver = parse_blender_ver(self.build_info.subversion)
+        else:
+            # If the returned version from the executable is invalid it might break loading.
+            ver_ = parse_blender_ver(self.build_dir.name, search=True)
+            ver = Version(
+                ver_.major,
+                ver_.minor,
+                ver_.patch,
+                prerelease=ver_.prerelease,
+            )
 
-        a = ReadBuildTask(
+        t = ReadBuildTask(
             self.build_dir,
             info=BuildInfo(
                 str(self.build_dir),
@@ -267,15 +322,16 @@ class DownloadWidget(BaseBuildWidget):
                 build_hash=None,
                 commit_time=self.build_info.commit_time,
                 branch=self.build_info.branch,
+                custom_name=self.build_info.custom_name,
                 custom_executable=self.build_info.custom_executable,
             ),
             archive_name=archive_name,
         )
-        a.finished.connect(self.download_rename)
-        a.failure.connect(lambda: print("Reading failed"))
-        self.parent.task_queue.append(a)
+        t.finished.connect(self.download_rename)
+        t.failure.connect(lambda e: logger.error(f"ReadBuildTask failed for {self.build_dir}: {e}"))
+        self.launcher.task_queue.append(t)
 
-    def download_rename(self, build_info: BuildInfo):
+    def download_rename(self, build_info: BuildInfo) -> None:
         self.set_state(DownloadState.RENAMING)
         new_name = f"blender-{build_info.full_semversion}"
         assert self.build_dir is not None
@@ -285,19 +341,22 @@ class DownloadWidget(BaseBuildWidget):
         )
         t.finished.connect(self.download_finished)
         t.failure.connect(lambda: print("Renaming failed"))
-        self.parent.task_queue.append(t)
+        self.launcher.task_queue.append(t)
 
-    def download_finished(self, path):
+    def download_finished(self, path: Path | None, is_removed: bool) -> None:
+        if self._is_removed is False:
+            self._is_removed = is_removed
+
         self.set_state(DownloadState.IDLE)
 
         if path is None:
             path = self.build_dir
 
         if path is not None:
-            widget = self.parent.draw_to_library(path, True)
+            self.launcher.draw_to_library(path, True, self.successful_read_callback)
 
             assert self.source_file is not None
-            self.parent.clear_temp(self.source_file)
+            self.launcher.clear_temp(self.source_file)
 
             if self.build_info.branch == "bforartists":
                 message = f"Bforartists {self.subversionLabel.text()} {self.build_info.commit_time}"
@@ -306,23 +365,112 @@ class DownloadWidget(BaseBuildWidget):
                 message = f"Blender {name}"
             message += " download finished!"
 
-            self.parent.show_message(
+            self.launcher.show_message(
                 message,
                 message_type=MessageType.DOWNLOADFINISHED,
             )
-            self.setInstalled(widget)
 
-    def setInstalled(self, build_widget: BaseBuildWidget):
-        if self.state == DownloadState.IDLE:
-            build_widget.destroyed.connect(self.uninstalled)
-            self.downloadButton.hide()
-            self.installedButton.show()
-            self.cancelButton.hide()
-            self.progressBar.hide()
-            self.installed = build_widget
+    def successful_read_callback(self, widget: LibraryWidget):
+        self.setInstalled(widget)
+        if self.updating_widget is not None and not self._is_removed:
+            updating_widget = self.updating_widget
+            if updating_widget.move_portable_settings:
+                logger.debug("Transferring portable settings...")
+                QTimer.singleShot(500, lambda: self.handle_portable_settings(updating_widget, widget))
+            else:
+                QTimer.singleShot(500, lambda: self.remove_old_build(updating_widget))
+        self.launcher.check_library_for_updates()
+
+    def handle_portable_settings(self, old_widget: LibraryWidget, new_widget: LibraryWidget) -> None:
+        """Handle portable settings transfer based on user choice."""
+        # early exit -- don't handle portable settings
+        if not old_widget.move_portable_settings:
+            self.remove_old_build(old_widget)
+            return
+
+        old_config_path = old_widget.make_portable_path()
+        if not old_config_path.is_dir():
+            logger.warning(f"No portable settings found at {old_config_path} to move.")
+            self._show_portable_failure_dialog(old_widget, t("msg.err.port.no_settings"))
+            return
+
+        new_config_path = new_widget.make_portable_path()
+
+        if not new_config_path.parent.exists():
+            logger.error(f"New config path parent does not exist: {new_config_path.parent}")
+            self._show_portable_failure_dialog(old_widget, t("msg.err.port.no_build_dir"))
+            return
+
+        try:
+            # Copy portable settings to new build
+            shutil.copytree(old_config_path, new_config_path, dirs_exist_ok=True)
+        except Exception as e:
+            logger.error(f"Failed to move portable settings: {e}")
+            self._show_portable_failure_dialog(old_widget, str(e))
+            return
+
+        logger.info(f"Portable settings moved from {old_config_path} to {new_config_path}")
+        # Update the new widget to reflect portable status
+        new_widget.makePortableAction.setText(t("act.a.port.rem"))
+        new_widget.showConfigFolderAction.setText(t("act.a.config_portable"))
+
+        self.remove_old_build(old_widget)
+
+    def _show_portable_failure_dialog(self, old_widget: LibraryWidget, error: str) -> None:
+        """Show dialog asking user how to handle portable settings transfer failure."""
+
+        popup = Popup.warning(
+            message=t("msg.popup.portable_failure", error=error),
+            buttons=[Popup.Button.CONT, Popup.Button.CANCEL],
+            parent=self.launcher,
+        )
+
+        popup.accepted.connect(lambda: self._handle_portable_failure_choice(old_widget, True))
+        popup.cancelled.connect(lambda: self._handle_portable_failure_choice(old_widget))
+
+    def _handle_portable_failure_choice(self, old_widget: LibraryWidget, continue_update: bool = False) -> None:
+        """Handle the user's choice after portable settings transfer failure."""
+        if continue_update:
+            self.remove_old_build(old_widget)
+        else:
+            old_widget.update_finished()
+            self.updating_widget = None
+
+    def remove_old_build(self, widget: LibraryWidget) -> None:
+        widget.confirm_major_version_update_removal(
+            lambda should_remove: self._proceed_with_removal(widget, should_remove)
+        )
+
+    def _proceed_with_removal(self, widget: LibraryWidget, should_remove: bool) -> None:
+        """Actually remove the old build based on user's choice."""
+        if should_remove:
+            widget.remove_from_drive(trash=True)
+
+        widget.update_finished()
+        self.updating_widget = None
+
+    def is_working(self):
+        return self.state != DownloadState.IDLE
+
+    def setInstalled(self, build_widget: LibraryWidget) -> None:
+        if self.is_working():
+            return
+
+        build_widget.destroyed.connect(self.uninstalled)
+        self.downloadButton.hide()
+        self.installedButton.show()
+        self.cancelButton.hide()
+        self.progressBar.hide()
+        self.installed = build_widget
 
     @Slot()
-    def uninstalled(self):
+    def uninstalled(self) -> None:
         self.installedButton.hide()
         self.downloadButton.show()
         self.installed = None
+
+    @Slot(int, int, int)
+    def _update_column_widths(self, version_width: int, _branch_width: int, commit_time_width: int) -> None:
+        """Update column widths to match header splitter."""
+        self.subversionLabel.setFixedWidth(version_width)
+        self.commitTimeLabel.setFixedWidth(commit_time_width)

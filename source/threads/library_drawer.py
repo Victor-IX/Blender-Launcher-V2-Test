@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING
 
-from modules._platform import get_platform
-from modules.settings import get_library_folder
+from modules.platform_utils import get_platform
+from modules.settings import build_library_folders, get_library_folder
 from modules.task import Task
 from PySide6.QtCore import Signal
 
@@ -36,20 +36,41 @@ def get_blender_builds(folders: Iterable[str | Path]) -> Iterable[tuple[Path, bo
         "macOS": "Blender/Blender.app/Contents/MacOS/Blender",
     }.get(platform, "blender")
 
+    # Standard executable paths for different platforms
+    bforartists_exe = {
+        "Windows": "bforartists.exe",
+        "Linux": "bforartists",
+        "macOS": "Bforartists/Bforartists.app/Contents/MacOS/Bforartists",
+    }.get(platform, "bforartists")
+
     for folder in folders:
         path = library_folder / folder
         if path.is_dir():
             for build in path.iterdir():
                 if build.is_dir():
+                    # Check for .blinfo file or executables
+                    has_blinfo = (folder / build / ".blinfo").is_file()
+                    has_blender_exe = (path / build / blender_exe).is_file()
+                    has_bforartists_exe = (path / build / bforartists_exe).is_file()
+                    # UPBGE uses the same executable name as Blender
+                    has_upbge_exe = (path / build / blender_exe).is_file()
+
+                    # Also check for macOS DMG extraction format (.app directly at root)
+                    if platform == "macOS":
+                        if not has_bforartists_exe:
+                            has_bforartists_exe = (path / build / "Bforartists.app").is_dir()
+                        if not has_blender_exe:
+                            has_blender_exe = (path / build / "Blender.app").is_dir()
+
                     yield (
                         folder / build,
-                        ((folder / build / ".blinfo").is_file() or (path / build / blender_exe).is_file()),
+                        has_blinfo or has_blender_exe or has_bforartists_exe or has_upbge_exe,
                     )
 
 
-@dataclass()
+@dataclass
 class DrawLibraryTask(Task):
-    folders: Iterable[str | Path] = ("stable", "daily", "experimental", "bforartists", "custom")
+    folders: Iterable[str | Path] = tuple(build_library_folders)
     found = Signal(Path)
     unrecognized = Signal(Path)
     finished = Signal()

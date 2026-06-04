@@ -1,22 +1,25 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import TypedDict
 
 import distro
-from modules._platform import _popen, get_cwd, get_platform
+from modules.platform_utils import _popen, get_cwd, get_platform
 from modules.tasks import TaskQueue
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QLabel, QVBoxLayout, QWidget
 from threads.downloader import DownloadTask
 from threads.extractor import ExtractTask
-from threads.scraper import get_release_tag
+from threads.scraping.launcher_updates import get_release_tag
 from widgets.base_progress_bar_widget import BaseProgressBarWidget
 from windows.base_window import BaseWindow
 
 release_link = "https://github.com/Victor-IX/Blender-Launcher-V2/releases/download/{0}/Blender_Launcher_{0}_{1}_x64.zip"
 api_link = "https://api.github.com/repos/Victor-IX/Blender-Launcher-V2/releases/tags/{}"
+
+logger = logging.getLogger()
 
 
 # this only shows relevant sections of the response
@@ -74,6 +77,11 @@ class BlenderLauncherUpdater(BaseWindow):
         self.show()
         self.download()
 
+    def _stop_queue(self):
+        # Ensure the updater process can exit cleanly on Windows after relaunching the new launcher.
+        self.queue.set_making_threads(False)
+        self.queue.fullstop()
+
     def get_link(self, response: GitHubRelease | None = None) -> str:
         assert self.manager is not None
         if response is None:
@@ -112,30 +120,39 @@ class BlenderLauncherUpdater(BaseWindow):
         link = self.get_link() if self.platform == "Linux" else release_link.format(self.release_tag, self.platform)
 
         assert self.manager is not None
-        self.ProgressBar.set_title("Downloading")
+        self.ProgressBar.set_state(self.ProgressBar.State.DOWNLOADING)
         a = DownloadTask(self.manager, link)
         a.progress.connect(self.ProgressBar.set_progress)
         a.finished.connect(self.extract)
         self.queue.append(a)
 
     def extract(self, source):
-        self.ProgressBar.set_title("Extracting")
+        self.ProgressBar.set_state(self.ProgressBar.State.EXTRACTING)
+        self.source_zip = source
         a = ExtractTask(source, self.cwd)
         a.progress.connect(self.ProgressBar.set_progress)
         a.finished.connect(self.finish)
         self.queue.append(a)
 
-    def finish(self, dist):
+    def finish(self, dist, is_removed):
+        # Clean up the downloaded zip file
+        if self.source_zip.exists():
+            try:
+                self.source_zip.unlink()
+            except Exception as e:
+                logger.warning(f"Failed to remove temporary file {self.source_zip}: {e}")
+
         # Launch 'Blender Launcher.exe' and exit
         launcher = str(dist)
         if self.platform == "Windows":
-            _popen([launcher])
+            _popen([launcher], no_console=False)
         elif self.platform == "Linux":
             os.chmod(dist, 0o744)
             _popen('nohup "' + launcher + '"')
 
+        self._stop_queue()
         self.app.quit()
 
     def closeEvent(self, event):
-        self.queue.fullstop()
+        self._stop_queue()
         event.accept()

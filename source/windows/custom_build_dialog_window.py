@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-import datetime
 import logging
 import os
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-from modules._platform import get_platform
-from modules.build_info import BuildInfo, ReadBuildTask
-from PySide6.QtCore import Qt, Signal
+from i18n import t
+from modules.build_info import BuildInfo, ReadBuildTask, parse_blender_ver
+from modules.platform_utils import get_platform
+from PySide6.QtCore import QDateTime, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QCompleter,
@@ -26,6 +26,7 @@ from widgets.lintable_line_edit import LintableLineEdit
 from windows.base_window import BaseWindow
 
 if TYPE_CHECKING:
+    from datetime import datetime
     from pathlib import Path
 
     from windows.main_window import BlenderLauncher
@@ -47,15 +48,14 @@ class CustomBuildDialogWindow(BaseWindow):
         old_build_info: BuildInfo | None = None,
     ):
         super().__init__(parent=parent)
-        self.parent_ = parent
         self.path = path
 
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.resize(160, 60)
 
         policy = QSizePolicy(
-            QSizePolicy.MinimumExpanding,
-            QSizePolicy.MinimumExpanding,
+            QSizePolicy.Policy.MinimumExpanding,
+            QSizePolicy.Policy.MinimumExpanding,
         )
         policy.setHorizontalStretch(0)
         policy.setVerticalStretch(0)
@@ -67,15 +67,15 @@ class CustomBuildDialogWindow(BaseWindow):
         self.central_layout.setContentsMargins(6, 6, 6, 6)
         self.central_layout.setSpacing(0)
         self.setCentralWidget(self.central_widget)
-        self.setWindowTitle("Build Entry Creator")
+        self.setWindowTitle(t("custom_build.title"))
 
-        self.text_label = QLabel(f"Create new build for: {path.relative_to(path.parent.parent)!s}")
+        self.text_label = QLabel(t("custom_build.text", path=str(path.relative_to(path.parent.parent))))
         self.text_label.setTextFormat(Qt.TextFormat.RichText)
         self.text_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
 
-        self.accept_button = QPushButton("Accept")
+        self.accept_button = QPushButton(t("act.accept"))
         self.accept_button.setEnabled(False)
-        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button = QPushButton(t("act.cancel"))
 
         self.button_layout = QHBoxLayout()
         self.button_layout.setContentsMargins(0, 0, 0, 0)
@@ -99,7 +99,9 @@ class CustomBuildDialogWindow(BaseWindow):
         # get list of executable files in `path`
         if platform == "Windows":
             executables = [
-                str(file.relative_to(path)) for file in path.iterdir() if file.is_file() and file.suffix == ".exe"
+                str(file.relative_to(path))
+                for file in path.iterdir()
+                if file.is_file() and file.suffix in (".exe", ".bat", ".cmd")
             ]
         else:
             executables = [
@@ -116,7 +118,7 @@ class CustomBuildDialogWindow(BaseWindow):
 
             return label
 
-        self.executable_label = QLabel("Executable name: ")
+        self.executable_label = QLabel(t("custom_build.exe"))
         self.executable_choice = LintableLineEdit(self)
 
         self.executable_choice.setCompleter(completer)
@@ -131,7 +133,7 @@ class CustomBuildDialogWindow(BaseWindow):
 
         self.auto_detect_button = QPushButton(self)
         self.auto_detect_button.clicked.connect(self.auto_detect_info)
-        self.auto_detect_button.setText("Auto-detect information")
+        self.auto_detect_button.setText(t("custom_build.autodetect"))
         self.auto_detect_button.setEnabled(False)
 
         # Excerpt from BuildInfo
@@ -171,6 +173,7 @@ class CustomBuildDialogWindow(BaseWindow):
         add_row = row_factory(settings_layout)
 
         self.subversion_edit = QLineEdit(self)
+        self.subversion_edit.textChanged.connect(self.check_binfo_is_valid)
         self.hash_edit = QLineEdit(self)
         self.commit_time = QDateTimeEdit(self)
         self.commit_time.setCalendarPopup(True)
@@ -178,12 +181,12 @@ class CustomBuildDialogWindow(BaseWindow):
         self.custom_name = QLineEdit(self)
         self.favorite = QCheckBox(self)
 
-        add_row(self.subversion_edit, "Subversion: ")
-        add_row(self.hash_edit, "Build hash: ")
-        add_row(self.commit_time, "Commit time: ")
-        add_row(self.branch_edit, "Branch name: ")
-        add_row(self.custom_name, "Custom name: ")
-        add_row(self.favorite, "Favorite: ")
+        add_row(self.subversion_edit, t("custom_build.svn"))
+        add_row(self.hash_edit, t("custom_build.hash"))
+        add_row(self.commit_time, t("custom_build.ctime"))
+        add_row(self.branch_edit, t("custom_build.branch"))
+        add_row(self.custom_name, t("custom_build.custom"))
+        add_row(self.favorite, t("custom_build.fav"))
 
         # Label
         self.central_layout.addWidget(self.text_label)
@@ -207,7 +210,7 @@ class CustomBuildDialogWindow(BaseWindow):
             str(self.path),
             self.subversion_edit.text(),
             self.hash_edit.text(),
-            self.commit_time.dateTime().toPyDateTime(),
+            cast("datetime", self.commit_time.dateTime().toPython()),
             self.branch_edit.text(),
             self.custom_name.text(),
             self.favorite.isChecked(),
@@ -228,7 +231,14 @@ class CustomBuildDialogWindow(BaseWindow):
 
     def check_executable_choice(self):
         p = self.path / self.executable_choice.text()
-        if os.access(p, os.X_OK):
+        platform = get_platform()
+
+        if platform == "Windows":
+            is_valid = p.is_file() and p.suffix in (".exe", ".bat", ".cmd")
+        else:
+            is_valid = os.access(p, os.X_OK)
+
+        if is_valid:
             self.executable_choice.set_valid(True)
             self.exe_is_valid = True
         else:
@@ -236,8 +246,26 @@ class CustomBuildDialogWindow(BaseWindow):
             self.exe_is_valid = False
 
         is_chosen = bool(self.executable_choice.text())
+
+        # Disable auto-detect for batch files on Windows
+        if platform == "Windows" and p.suffix.lower() in (".bat", ".cmd"):
+            self.auto_detect_button.setEnabled(False)
+        else:
+            self.auto_detect_button.setEnabled(is_chosen)
+
         self.auto_detect_button.setEnabled(is_chosen)
-        self.accept_button.setEnabled(is_chosen)
+
+        self.check_binfo_is_valid()
+
+    def check_binfo_is_valid(self):
+        exe_valid = self.exe_is_valid
+        try:
+            parse_blender_ver(self.subversion_edit.text())
+            version_valid = True
+        except ValueError:
+            version_valid = False
+
+        self.accept_button.setEnabled(exe_valid and version_valid)
 
     def auto_detect_info(self):
         a = ReadBuildTask(
@@ -247,7 +275,7 @@ class CustomBuildDialogWindow(BaseWindow):
         )
         a.finished.connect(self.load_from_build_info)
         a.failure.connect(self.auto_detect_failed)
-        self.parent_.task_queue.append(a)
+        self.launcher.task_queue.append(a)
         self.auto_detect_button.setEnabled(False)
 
     def load_from_build_info(self, binfo: BuildInfo):
@@ -261,7 +289,7 @@ class CustomBuildDialogWindow(BaseWindow):
         if not self.hash_edit.text():
             self.hash_edit.setText(binfo.build_hash)
 
-        self.commit_time.setDateTime(binfo.commit_time)
+        self.commit_time.setDateTime(QDateTime.fromSecsSinceEpoch(int(binfo.commit_time.timestamp())))
 
         if not self.branch_edit.text():
             self.branch_edit.setText(binfo.branch)
@@ -270,6 +298,7 @@ class CustomBuildDialogWindow(BaseWindow):
             self.custom_name.setText(binfo.custom_name)
 
         self.auto_detect_button.setEnabled(True)
+        self.check_binfo_is_valid()
 
     def auto_detect_failed(self):
         self.auto_detect_button.setEnabled(True)

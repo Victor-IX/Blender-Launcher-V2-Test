@@ -1,16 +1,9 @@
 from __future__ import annotations
 
+from i18n import t
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import (
-    QButtonGroup,
-    QCheckBox,
-    QGridLayout,
-    QLabel,
-    QSizePolicy,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtWidgets import QCheckBox, QGridLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 
 class RepoUserView(QWidget):
@@ -23,7 +16,6 @@ class RepoUserView(QWidget):
         description: str = "",
         library: bool | None = True,  # bool if used, None if disabled
         download: bool | None = True,  # bool if used, None if disabled
-        bind_download_to_library: bool = True,
         parent=None,
     ):
         super().__init__(parent)
@@ -41,11 +33,7 @@ class RepoUserView(QWidget):
         self.library_enable_button = QCheckBox(self)
         self.library_enable_button.setProperty("Visibility", True)
         self.library_enable_button.setChecked(library or False)
-        self.library_enable_button.setToolTip(
-            "Make this repository visible / hidden in the launcher view.<br>\
-            If disabled, then it will automatically disable fetching,<br>\
-            unless another repository shares the fetching behavior."
-        )
+        self.library_enable_button.setToolTip(t("repo.visibility_tooltip"))
         self.library_enable_button.toggled.connect(self.__library_button_toggled)
 
         if library is None:
@@ -54,18 +42,12 @@ class RepoUserView(QWidget):
         self.download_enable_button = QCheckBox(self)
         self.download_enable_button.setProperty("Download", True)
         self.download_enable_button.setChecked(download or False)
-        self.download_enable_button.setToolTip(
-            'Enable / Disable fetching this repository.<br>\
-            If you force-check by holding SHIFT while pressing the "Check" button,<br>\
-            Then all visible categories will download regardless of fetching settings.'
-        )
+        self.download_enable_button.setToolTip(t("repo.download_tooltip"))
         self.download_enable_button.toggled.connect(self.__download_button_toggled)
         self.previous_download = download or False
 
         if download is None:
             self.download_enable_button.setEnabled(False)
-
-        self.bind_download_to_library = bind_download_to_library
 
         self.layout_ = QGridLayout(self)
         self.layout_.setContentsMargins(5, 5, 0, 5)
@@ -77,18 +59,9 @@ class RepoUserView(QWidget):
         self.layout_.addWidget(self.library_enable_button, 0, 1, 1, 1)
         self.layout_.addWidget(self.download_enable_button, 0, 2, 1, 1)
 
-    def add_library_to_group(self, grp: QButtonGroup):
-        grp.addButton(self.library_enable_button)
-        grp.buttonToggled.connect(self.__library_toggled)
-
-    def add_downloads_to_group(self, grp: QButtonGroup):
-        grp.addButton(self.download_enable_button)
-        grp.buttonToggled.connect(self.__download_toggled)
-
     def __library_button_toggled(self, checked: bool):
         self.title_label.setEnabled(checked)
-        if self.bind_download_to_library:
-            self.__library_bound_toggle(checked)
+        self.__library_bound_toggle(checked)
         self.library_changed.emit(checked)
 
     def __download_button_toggled(self, checked: bool):

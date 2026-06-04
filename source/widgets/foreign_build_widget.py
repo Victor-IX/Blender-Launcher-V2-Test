@@ -1,7 +1,7 @@
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from i18n import t
 from modules.build_info import BuildInfo
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QVBoxLayout
@@ -17,23 +17,16 @@ if TYPE_CHECKING:
 
 class UnrecoBuildWidget(BaseBuildWidget):
     def __init__(self, parent: "BlenderLauncher", path: Path, list_widget: BaseListWidget, item):
-        super().__init__(parent=parent)
-        self.parent: BlenderLauncher = parent
+        super().__init__(
+            parent=parent,
+            item=item,
+            build_info=BuildInfo.from_blender_path(path),
+        )
+        self.launcher: BlenderLauncher = parent
         self.path = path
         self.list_widget = list_widget
-        self.item = item
-        self.build_info = BuildInfo(
-            str(path),
-            "0.0.0",
-            "",
-            datetime.now(tz=timezone.utc),
-            "",
-            str(path.name),
-            False,
-            None,
-        )
 
-        self.init_button = QPushButton("Initialize")
+        self.init_button = QPushButton(t("act.init"))
         self.init_button.setFixedWidth(85)
         self.init_button.setProperty("CreateButton", True)
         self.init_button.clicked.connect(self.init_unrecognized)
@@ -55,13 +48,13 @@ class UnrecoBuildWidget(BaseBuildWidget):
         self.setLayout(self.main_hl)
 
     def init_unrecognized(self):
-        dlg = CustomBuildDialogWindow(self.parent, self.path)
+        dlg = CustomBuildDialogWindow(self.launcher, self.path)
         dlg.accepted.connect(self.new_build)
 
     @Slot(BuildInfo)
     def new_build(self, binfo: BuildInfo):
         binfo.write_to(self.path)
-        self.parent.draw_to_library(self.path, True)
+        self.launcher.draw_to_library(self.path, True)
         self.destroy()
 
     def context_menu(self):

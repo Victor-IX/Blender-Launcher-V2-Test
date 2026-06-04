@@ -6,24 +6,30 @@ import logging
 import subprocess
 import sys
 from pathlib import Path
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 from modules.blendfile_reader import read_blendfile_header
 from modules.build_info import BuildInfo, LaunchMode, LaunchOpenLast, LaunchWithBlendFile, get_args
-from modules.settings import get_favorite_path, get_version_specific_queries
-from modules.version_matcher import BasicBuildInfo, BInfoMatcher, VersionSearchQuery
+from modules.settings import build_library_folders, get_favorite_path, get_version_specific_queries
+from modules.version_matcher import BasicBuildInfo, VersionSearchQuery
 from threads.library_drawer import get_blender_builds
 
 logger = logging.getLogger()
 
 
 def cli_launch(
-    file: Path | None = None, version_query: VersionSearchQuery | None = None, open_last: bool = False
+    file: Path | None = None,
+    version_query: VersionSearchQuery | None = None,
+    open_last: bool = False,
+    blender_args: Sequence[str] = (),
 ) -> NoReturn:
     # Search for builds
     logger.info("Searching for all builds")
     builds: list[BuildInfo] = []
-    for build, _ in get_blender_builds(folders=("stable", "daily", "experimental", "custom")):
+    for build, _ in get_blender_builds(folders=build_library_folders):
         if (blinfo := build / ".blinfo").exists():
             with blinfo.open("r", encoding="utf-8") as f:
                 blinfo = json.load(f)
@@ -48,10 +54,9 @@ def cli_launch(
 
     basics = {BasicBuildInfo.from_buildinfo(b): b for b in builds}
 
-    matcher = BInfoMatcher(tuple(basics.keys()))
-
     all_queries = get_version_specific_queries()
 
+    query: VersionSearchQuery | None = None
     if version_query is not None:
         query = version_query
 
@@ -66,19 +71,23 @@ def cli_launch(
             if v in all_queries:
                 query = all_queries[v]
             else:
-                query = VersionSearchQuery(v.major, v.minor, "^")
+                query = VersionSearchQuery.version(v.major, v.minor, "^")
 
     if query is None:
         logger.warning("Could not read file header and no version was provided! defaulting to ^.^.^")
-        query = VersionSearchQuery("^", "^", "^")
+        query = VersionSearchQuery.default()
 
-    matches = matcher.match(query)
+    matches = query.match(basics.keys())
 
     launch_mode: LaunchMode | None = None
     if file is not None:
         launch_mode = LaunchWithBlendFile(file)
     if open_last:
         launch_mode = LaunchOpenLast()
+
+    if len(matches) == 0:
+        logger.exception(f"Could not find any matching builds for the query: '{query}'.")
+        sys.exit(1)
 
     if len(matches) > 1:
         print(f"Found {len(matches)} matching builds:")
@@ -103,6 +112,10 @@ def cli_launch(
         build_info = basics[build]
 
     args = get_args(build_info, launch_mode=launch_mode, linux_nohup=False)
+    if isinstance(args, list):
+        args.extend(blender_args)
+    else:
+        args += f" {' '.join(blender_args)}"
     logger.info(f"Launching build: {build}")
     logger.info(f"With args: {args}")
     proc = subprocess.Popen(args, shell=True)

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import logging
 import ssl
-import sys
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING
 
-from modules._platform import get_cwd, get_platform_full, is_frozen
+import certifi
+from modules.platform_utils import get_platform_full
 from modules.settings import (
+    get_github_token,
     get_proxy_host,
     get_proxy_password,
     get_proxy_port,
@@ -31,7 +32,7 @@ proxy_types_chemes = {
     4: "socks5h://",
 }
 
-REQUEST_MANAGER = Union[PoolManager, ProxyManager, SOCKSProxyManager]
+REQUEST_MANAGER = PoolManager | ProxyManager | SOCKSProxyManager
 
 
 # TODO
@@ -52,13 +53,13 @@ class ConnectionManager(QObject):
 
         # Basic Headers
         agent = f"Blender-Launcher-v2/v.{self.version!s}/{get_platform_full()}/UserID-{get_user_id()}"
-        self._headers = {"user-agent": agent}
+        self._headers = {"user-agent": agent, "Accept-Encoding": "gzip, deflate"}
         logger.info(f"Connection Manager Header: {agent}")
-        # Get custom certificates file path
-        if is_frozen() is True:
-            self.cacert = sys._MEIPASS + "/files/custom.pem"  # noqa: SLF001
-        else:
-            self.cacert = (get_cwd() / "source/resources/certificates/custom.pem").as_posix()
+        # Use certifi's up-to-date CA bundle for TLS verification. The previously
+        # bundled custom.pem was a stale Mozilla snapshot that lacked ISRG Root X2,
+        # which broke verification of download.blender.org after its chain moved to
+        # the X2 hierarchy and the cross-signed X2 expired (2025-09-15). See #414.
+        self.cacert = certifi.where()
 
         self.request_counter = 0
 
@@ -142,7 +143,25 @@ class ConnectionManager(QObject):
             self.request_counter += 1
             logger.debug(f"Request Counter: {self.request_counter}")
 
-            return self.manager.request(_method, _url, fields, headers, **urlopen_kw)
+            merged_headers = headers.copy() if headers else {}
+
+            # Add GitHub token to headers if the request is to GitHub API and token is set
+            if "api.github.com" in _url:
+                github_token = get_github_token()
+                if github_token:
+                    merged_headers["Authorization"] = f"token {github_token}"
+                    logger.debug(f"GitHub API request to: {_url} (with authentication)")
+                else:
+                    logger.debug(f"GitHub API request to: {_url} (no token configured)")
+
+            response = self.manager.request(
+                _method, _url, fields=fields, headers=merged_headers if merged_headers else None, **urlopen_kw
+            )
+            if response is not None and response.status == 401:
+                logger.warning("Request returned a 401 response; your credentials are possibly expired!")
+
+            return response
+
         except Exception:
             self.error.emit()
             return None

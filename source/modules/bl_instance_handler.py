@@ -1,0 +1,53 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from i18n import t
+from PySide6.QtCore import QObject, Signal
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
+from windows.popup_window import Popup
+
+if TYPE_CHECKING:
+    from semver import Version
+    from windows.base_window import BaseWindow
+
+
+class BLInstanceHandler(QObject):
+    """
+    Manages the singleton behavior of Blender launcher.
+
+    This class ensures that only one instance of the launcher is running at a time.
+    If another instance of the launcher tries to start, it will find this one and stop initialization.
+    """
+
+    show_launcher = Signal()
+
+    def __init__(self, version: Version, window: BaseWindow):
+        super().__init__(window)
+        self.window = window
+        self.version = version
+        self.server = QLocalServer(self)
+        self.server.listen("blender-launcher-server")
+        self.server.newConnection.connect(self.new_connection)
+
+    def new_connection(self):
+        socket = self.server.nextPendingConnection()
+        assert socket is not None
+        socket.readyRead.connect(lambda: self.read_socket_data(socket))
+        self.show_launcher.emit()
+
+    def read_socket_data(self, socket: QLocalSocket):
+        qbytearr = socket.readAll()
+        d = qbytearr.data()
+        if isinstance(d, memoryview):
+            d = d.tobytes()
+        if (given := str(d, encoding="ascii")) != str(self.version):
+            self.dlg = Popup.warning(
+                message=t(
+                    "msg.popup.blver_mismatch",
+                    running=str(self.version),
+                    given=given,
+                ),
+                buttons=Popup.Button.info(),
+                parent=self.window,
+            )

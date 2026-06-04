@@ -1,7 +1,7 @@
-import os
-import sys
 import json
+import os
 import subprocess
+import sys
 
 if sys.platform == "win32":
     source_dir = os.path.join(os.getenv("LOCALAPPDATA"), "Blender Launcher")
@@ -24,11 +24,11 @@ for source_file, destination_file in files.items():
 
     if os.path.exists(source_file_path):
         try:
-            with open(source_file_path, "r") as src_file:
+            with open(source_file_path) as src_file:
                 source_data = json.load(src_file)
 
             if os.path.exists(destination_file_path):
-                with open(destination_file_path, "r") as dest_file:
+                with open(destination_file_path) as dest_file:
                     destination_data = json.load(dest_file)
 
                 version = destination_data.get("api_file_version", "1.0")
@@ -41,9 +41,9 @@ for source_file, destination_file in files.items():
                 destination_data["api_file_version"] = "1.0"
 
             with open(destination_file_path, "w") as dest_file:
-                json.dump(destination_data, dest_file, indent=1)
+                json.dump(destination_data, dest_file, indent=4)
 
-            # Use git to check if the file has been modified (not only the file verison)
+            # Use git to check if the file has been modified (not only the file version)
             result = subprocess.run(["git", "diff", "--numstat", destination_file_path], capture_output=True, text=True)
             modified_lines = sum(int(line.split()[0]) for line in result.stdout.splitlines())
 

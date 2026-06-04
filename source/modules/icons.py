@@ -16,6 +16,7 @@ class Icons:
     close: QIcon
     expand_more: QIcon
     expand_less: QIcon
+    search: QIcon
     folder: QIcon
     favorite: QIcon
     fake: QIcon
@@ -23,6 +24,7 @@ class Icons:
     filled_circle: QIcon
     quick_launch: QIcon
     download: QIcon
+    update: QIcon
     file: QIcon
     taskbar: QIcon
     bl_file: QIcon
@@ -30,7 +32,7 @@ class Icons:
 
     @classmethod
     @cache
-    def get(cls, color=WHITE):
+    def get(cls, color=WHITE) -> "Icons":
         return cls(
             load_icon(color, "settings"),
             load_icon(color, "wiki"),
@@ -38,6 +40,7 @@ class Icons:
             load_icon(color, "close"),
             load_icon(color, "expand_more"),
             load_icon(color, "expand_less"),
+            load_icon(color, "search"),
             load_icon(color, "folder"),
             load_icon(color, "favorite"),
             load_icon(color, "fake"),
@@ -45,6 +48,7 @@ class Icons:
             load_icon(color, "filled_circle"),
             load_icon(color, "quick_launch"),
             load_icon(color, "download"),
+            load_icon(color, "update"),
             load_icon(color, "file"),
             QIcon(base_path + "bl/bl.ico"),
             QIcon(base_path + "bl/bl_file.ico"),
@@ -69,10 +73,10 @@ def get_bl_file_location():
     import sys
     from pathlib import Path
 
-    from modules._platform import get_cwd, is_frozen
+    from modules.platform_utils import get_cwd, is_frozen
 
     assert sys.platform == "win32"
     if is_frozen():
-        return Path(sys._MEIPASS, "files", "bl_file.ico")  # noqa: SLF001
+        return Path(getattr(sys, "_MEIPASS", "")) / "files" / "bl_file.ico"
 
     return get_cwd() / "source" / "resources" / "icons" / "bl" / "bl_file.ico"

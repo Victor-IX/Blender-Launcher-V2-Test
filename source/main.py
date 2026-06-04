@@ -1,86 +1,56 @@
 from __future__ import annotations
 
+import argparse
 import gettext
 import logging
-import logging.handlers
 import os
 import sys
 from argparse import ArgumentParser
 from pathlib import Path
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
 
-import modules._resources_rc
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+import modules._resources_rc  # noqa: F401
+import utils.i18n_init  # noqa: F401
 from modules import argument_parsing as ap
-from modules._platform import _popen, get_cache_path, get_cwd, get_launcher_name, get_platform, is_frozen
 from modules.cli_launching import cli_launch
+from modules.file_utils import retry_on_permission_error
+from modules.fonts import Fonts
+from modules.platform_utils import _popen, get_cache_path, get_cwd, get_launcher_name, get_platform, is_frozen
+from modules.settings import get_auto_register_winget, get_log_level
 from modules.shortcut import register_windows_filetypes, unregister_windows_filetypes
-from modules.version_matcher import VALID_FULL_QUERIES, VALID_QUERIES, VERSION_SEARCH_SYNTAX
+from modules.uninstall import perform_uninstall
+from modules.version_matcher import VALID_FULL_QUERIES, VERSION_SEARCH_SYNTAX
+from modules.winget_integration import register_with_winget
+from PySide6.QtCore import QFile, QTextStream
 from PySide6.QtWidgets import QApplication
 from semver import Version
-from windows.popup_window import PopupWindow, PopupIcon
+from utils.dpi import apply_scale_factor
+from utils.logger import setup_logging
 
-LOG_COLORS = {
-    "DEBUG": "\033[36m",  # Cyan
-    "INFO": "\033[37m",  # White
-    "WARNING": "\033[33m",  # Yellow
-    "ERROR": "\033[31m",  # Red
-    "CRITICAL": "\033[41m",  # Red background
-}
-
-RESET_COLOR = "\033[0m"  # Reset to default color
-
-
-class ColoredFormatter(logging.Formatter):
-    def format(self, record):
-        log_color = LOG_COLORS.get(record.levelname, RESET_COLOR)
-        message = super().format(record)
-        return f"{log_color}{message}{RESET_COLOR}"
-
-
-version = Version(2, 4, 1,
+version = Version(
+    2,
+    6,
+    0,
+    # prerelease="rc.1",
 )
+
 
 _ = gettext.gettext
-
-# Setup logging config
-_format = "[%(asctime)s:%(levelname)s] %(message)s"
-cache_path = Path(get_cache_path())
-if not cache_path.is_dir():
-    cache_path.mkdir()
-color_formatter = ColoredFormatter(_format)
-
-try:
-    file_handler = logging.handlers.RotatingFileHandler(
-        cache_path.absolute() / "Blender Launcher.log",
-        maxBytes=10 * 1024 * 1024,  # 10 MB
-        backupCount=2,
-    )
-    file_handler.setFormatter(logging.Formatter(_format))
-    file_handler.doRollover()
-except PermissionError:
-    file_handler = logging.FileHandler(cache_path.absolute() / "Blender Launcher.log")
-
-stream_handler = logging.StreamHandler(stream=sys.stdout)
-stream_handler.setFormatter(color_formatter)
-
-logging.basicConfig(
-    format=_format,
-    handlers=[file_handler, stream_handler],
-)
-
 logger = logging.getLogger(__name__)
 
 
-# Setup exception handling
 def handle_exception(exc_type, exc_value, exc_traceback):
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
         return
 
-    logger.error(f"{get_platform()} - Blender Launcher {version}", exc_info=(exc_type, exc_value, exc_traceback))
-
-
-sys.excepthook = handle_exception
+    logger.error(
+        f"{get_platform()} - Blender Launcher {version}",
+        exc_info=(exc_type, exc_value, exc_traceback),
+    )
 
 
 def add_help(parser: ArgumentParser):
@@ -93,14 +63,14 @@ def add_help(parser: ArgumentParser):
 
 
 def main():
-    parser = ArgumentParser(description=f"Blender Launcher V2 ({version})", add_help=False)
+    parser = ArgumentParser(description=f"Blender Launcher ({version})", add_help=False)
     add_help(parser)
 
     subparsers = parser.add_subparsers(dest="command")
 
     update_parser = subparsers.add_parser(
         "update",
-        help="Update the application to a new version.",
+        help="Update the application to a new version. Run 'update --help' to see available options.",
         add_help=False,
     )
     add_help(update_parser)
@@ -129,14 +99,20 @@ def main():
 
     launch_parser = subparsers.add_parser(
         "launch",
-        help="Launch a specific version of Blender. If not file or version is specified, Quick launch is chosen.",
+        help=(
+            "Launch a specific version of Blender. If not file or version is specified, "
+            "Quick launch is chosen. Run 'launch --help' to see available options."
+        ),
         add_help=False,
     )
     add_help(launch_parser)
     grp = launch_parser.add_mutually_exclusive_group()
     grp.add_argument("-f", "--file", type=Path, help="Path to a specific Blender file to launch.")
     grp.add_argument(
-        "-ol", "--open-last", action="store_true", help="Open the last file in the specified blender build"
+        "-ol",
+        "--open-last",
+        action="store_true",
+        help="Open the last file in the specified blender build",
     )
 
     launch_parser.add_argument("-v", "--version", help=f"Version to launch. {VERSION_SEARCH_SYNTAX}")
@@ -146,6 +122,11 @@ def main():
         action="store_true",
         help="Launch Blender from CLI. does not open any QT frontend. WARNING: LIKELY DOES NOT WORK IN WINDOWS BUNDLED EXECUTABLE",
     )
+    launch_parser.add_argument(
+        "blender_args",
+        nargs=argparse.REMAINDER,
+        help="Additional arguments to pass to Blender, should be provided after double dash. E.g. 'launch -- --background',",
+    )
 
     if sys.platform == "win32":
         subparsers.add_parser(
@@ -153,6 +134,19 @@ def main():
             help="Registers the program to read .blend builds. Adds Blender Launcher to the Open With window. (WIN ONLY)",
         )
         subparsers.add_parser("unregister", help="Undoes the changes that `register` makes. (WIN ONLY)")
+
+        uninstall_parser = subparsers.add_parser(
+            "uninstall",
+            help="Fully uninstall Blender Launcher: removes settings, registry entries, shortcuts, and cached data. (WINDOWS ONLY)",
+            add_help=False,
+        )
+        add_help(uninstall_parser)
+        uninstall_parser.add_argument(
+            "--quiet",
+            "-q",
+            action="store_true",
+            help="Uninstall without confirmation prompt (used by winget).",
+        )
 
     input_args = None
 
@@ -174,19 +168,31 @@ def main():
         ap.show_help(parser, update_parser, launch_parser, args)
         sys.exit(0)
 
-    if args.debug:
-        logging.root.setLevel(logging.DEBUG)
-    else:
-        logging.root.setLevel(logging.INFO)
+    setup_logging(
+        log_path=get_cache_path().absolute() / "blender-launcher.log",
+        level="DEBUG" if args.debug else get_log_level(),
+        max_bytes=1 * 1024 * 1024,  # 1 MB
+        backup_count=2,
+        format_string="[%(asctime)s:%(levelname)s] %(message)s",
+    )
+    sys.excepthook = handle_exception
 
     # Log Blender Launcher version
     logger.info(f"Blender Launcher Version: {version}")
 
-    # Create an instance of application and set its core properties
-    app = QApplication(["blender-launcher-v2"])
-    app.setApplicationName("blender-launcher-v2")
-    app.setStyle("Fusion")
-    app.setApplicationVersion(str(version))
+    with apply_scale_factor():
+        # Create an instance of application and set its core properties
+        app = QApplication(["blender-launcher-v2"])
+        app.setApplicationName("blender-launcher-v2")
+        app.setStyle("Fusion")
+        app.setApplicationVersion(str(version))
+
+        # app style
+        file = QFile(":resources/styles/global.qss")
+        file.open(QFile.OpenModeFlag.ReadOnly | QFile.OpenModeFlag.Text)
+        style_sheet = QTextStream(file).readAll()
+        app.setStyleSheet(style_sheet)
+        app.setFont(Fonts.get().font_10)
 
     set_lib_folder: Path | None = args.set_library_folder
     if set_lib_folder is not None:
@@ -196,15 +202,32 @@ def main():
         start_update(app, args.instanced, args.version)
 
     if args.command == "launch":
-        start_launch(app, args.file, args.version, args.open_last, cli=args.cli)
+        blender_args: list[str] = args.blender_args.copy()
+        # Skip only first `--`, as it also can be a valid argument to pass to Blender.
+        if "--" in blender_args:
+            blender_args.remove("--")
+        start_launch(
+            app,
+            args.file,
+            args.version,
+            args.open_last,
+            cli=args.cli,
+            blender_args=blender_args,
+        )
 
     if args.command == "register":
         start_register()
     if args.command == "unregister":
         start_unregister()
+    if args.command == "uninstall":
+        perform_uninstall(args.quiet)
 
     if not args.instanced:
         check_for_instance()
+
+    # Register with WinGet on startup
+    if get_platform() == "Windows" and get_auto_register_winget():
+        register_with_winget(sys.executable, str(version))
 
     from windows.main_window import BlenderLauncher
 
@@ -221,17 +244,17 @@ def main():
 
 
 def start_set_library_folder(app: QApplication, lib_folder: str):
+    from i18n import t
     from modules.settings import set_library_folder
+    from windows.popup_window import Popup
 
     if set_library_folder(str(lib_folder)):
         logging.info(f"Library folder set to {lib_folder!s}")
     else:
         logging.error("Failed to set library folder")
-        PopupWindow(
-            title="Warning",
-            message="Passed path is not a valid folder or<br>it doesn't have write permissions!",
-            icon=PopupIcon.WARNING,
-            button="Quit",
+        Popup.warning(
+            message=t("msg.err.folder_invalid"),
+            buttons=Popup.Button.QUIT,
             app=app,
         ).show()
         sys.exit(app.exec())
@@ -251,11 +274,11 @@ def start_update(app: QApplication, is_instanced: bool, tag: str | None):
         cwd = get_cwd()
         source = cwd / bl_exe
         dist = cwd / blu_exe
-        shutil.copy(source, dist)
+        retry_on_permission_error(shutil.copy, source, dist)
 
         # Run the updater with the instanced flag
         if get_platform() == "Windows":
-            _popen([blu_exe, "--instanced", "update"])
+            _popen([blu_exe, "--instanced", "update"], no_console=False)
         elif get_platform() == "Linux":
             os.chmod(blu_exe, 0o744)
             _popen(f'nohup "{blu_exe}" --instanced update')
@@ -268,6 +291,7 @@ def start_launch(
     version_query: str | None = None,
     open_last: bool = False,
     cli: bool = False,
+    blender_args: Sequence[str] = (),
 ) -> NoReturn:
     from modules.version_matcher import VersionSearchQuery
     from windows.launching_window import LaunchingWindow
@@ -290,7 +314,12 @@ def start_launch(
         file = Path(str(file).strip('"'))
 
     if cli:
-        cli_launch(file=file, version_query=query, open_last=open_last)
+        cli_launch(
+            file=file,
+            version_query=query,
+            open_last=open_last,
+            blender_args=blender_args,
+        )
         sys.exit(1)
     else:
         LaunchingWindow(app, version_query=query, blendfile=file, open_last=open_last).show()
